@@ -5,7 +5,7 @@ from torch import nn
 class ParamExtractorNet(nn.Module):
     def __init__(self, in_lower=(7, 6, 17), lg_len=7, out_dim=28, hidden_size=1024, num_hidden=3, dropout=0.0):
         super().__init__()
-        lower_flat = in_lower[0]*in_lower*in_lower[2]
+        lower_flat = in_lower[0]*in_lower[1]*in_lower[2]
         self.lower_fc_in = nn.Linear(lower_flat, hidden_size)
         self.lower_hidden = nn.ModuleList([
             nn.Linear(hidden_size, hidden_size) for _ in range(max(0, num_hidden - 1))

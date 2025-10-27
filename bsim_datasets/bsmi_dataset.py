@@ -26,8 +26,8 @@ class BSIMDataset(Dataset):
             'ivcv_max': float(self.ivcv.max()),
             'lg_min': float(self.lg.min()),
             'lg_max': float(self.lg.max()),
-            'param_min': self.params.min(axis=0).astype(float),
-            'param_max': self.params.max(axis=0).astype(float)}
+            'params_min': self.params.min(axis=0).astype(float),
+            'params_max': self.params.max(axis=0).astype(float)}
         return meta
 
     def _apply_norm(self):
@@ -46,6 +46,6 @@ class BSIMDataset(Dataset):
     def __getitem__(self, idx):
         return {
             'ivcv': torch.from_numpy(self.ivcv[idx]),
-            'ig': torch.from_numpy((self.lg[idx])),
+            'lg': torch.from_numpy((self.lg[idx])),
             'params': torch.from_numpy(self.params[idx])
         }

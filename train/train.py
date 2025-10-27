@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+import sys
 import time
 
 import numpy as np
@@ -8,9 +9,12 @@ import torch
 from torch import nn
 from torch.utils.data import random_split, DataLoader
 
-from datasets.bsmi_dataset import BSIMDataset
+sys.path.append(os.path.dirname(__file__))
+sys.path.append(os.path.dirname(os.path.dirname(__file__)))
+
+from bsim_datasets.bsmi_dataset import BSIMDataset
 from models.param_extractor import ParamExtractorNet
-from train.utils import EarlyStopping, pct_rmse
+from utils import EarlyStopping, pct_rmse
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
@@ -56,8 +60,11 @@ def main(args):
     ivcv, lg, params = data['ivcv'], data['lg'], data['params']
     dataset = BSIMDataset(ivcv, lg, params)
     os.makedirs(args.out_dir, exist_ok=True)
+
+    serializable_meta = {k: v.tolist() if isinstance(v, np.ndarray) else v
+                         for k, v in dataset.norm_meta.items()}
     with open(os.path.join(args.out_dir, 'norm_meta.json'), 'w') as f:
-        json.dump(dataset.norm_meta, f, indent=2)
+        json.dump(serializable_meta, f, indent=2)
 
     n = len(dataset)
     n_val = int(0.1*n)
@@ -69,7 +76,7 @@ def main(args):
     model = ParamExtractorNet(hidden_size=args.hidden_size, num_hidden=args.num_hidden).to(device)
     opt = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=1e-6)
     loss_fn = nn.MSELoss()
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(opt, mode='min', factor=0.5, patience=5, verbose=True)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(opt, mode='min', factor=0.5, patience=5)
     early = EarlyStopping(patience=args.patience)
 
     best_val = float('inf')
@@ -83,7 +90,7 @@ def main(args):
 
         if val_loss < best_val - 1e-8:
             best_val = val_loss
-            torch.save({'model_state': model.state_dict(), 'norm_meta': dataset.norm_meta}, os.path.join(args.out_dir, 'best_model.pth'))
+            torch.save(model.state_dict(), os.path.join(args.out_dir, 'best_model.pth'))
             print('Saved best model.')
 
         early.step(val_loss)
