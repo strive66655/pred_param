@@ -6,6 +6,23 @@
 - 训练脚本与工具
 - 推理脚本
 
+> 简化版本
+> 1. 从 .lis 生成特征和标签
+>    ```
+>    python data_parser.py
+>    ```
+> 2. 转换为训练数据
+>    ```
+>    python datasets/convert_parsed_data.py
+>    ```
+> 3. 训练模型
+>    ```
+>    python train/train_iv_extractor.py
+>    ```
+> 4. 预测参数
+>    ```
+>    python inference/predict_iv_params.py
+>    ```
 快速开始:
 1. 生成合成数据:
 ```
@@ -19,3 +36,5 @@ python train/train.py --data data/processed/demo_data.npz --out_dir experiments/
 ```
 python inference/predict_params.py --model experiments/exp_demo/best_model.pth --sample data/processed/demo_data.npz --out pred.txt
 ```
+
+
