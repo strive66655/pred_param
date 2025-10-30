@@ -1,31 +1,31 @@
-# train/train_iv_extractor.py
 import os
 import json
 import sys
-import time
+
 import torch
 import torch.nn as nn
 import numpy as np
-from matplotlib import pyplot as plt
-from torch.utils.data import DataLoader, random_split
+import matplotlib.pyplot as plt
+from torch.utils.data import DataLoader
 from tqdm import tqdm
 
+sys.path.append(os.path.dirname(__file__))
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
 from bsim_datasets.bsim_iv_dataset import BSIMIVDataset
 from models.param_extractor_iv import ParamExtractorIVNet
+from bsim_datasets.data_parser import split_train_val_data
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-LR = 1e-4
+LR = 1e-3
 BATCH_SIZE = 64
-NUM_EPOCHS = 200
-PATIENCE = 15
+NUM_EPOCHS = 300
+PATIENCE = 20
 MODEL_SAVE = "best_iv_extractor.pth"
-NORMALIZE_META = "iv_norm_meta.json"
 
 def train_one_epoch(model, loader, opt, loss_fn):
     model.train()
-    total = 0
+    total_loss = 0
     for batch in loader:
         iv = batch["iv"].to(DEVICE)
         params = batch["params"].to(DEVICE)
@@ -34,12 +34,12 @@ def train_one_epoch(model, loader, opt, loss_fn):
         opt.zero_grad()
         loss.backward()
         opt.step()
-        total += loss.item() * iv.size(0)
-    return total / len(loader.dataset)
+        total_loss += loss.item() * iv.size(0)
+    return total_loss / len(loader.dataset)
 
 def eval_model(model, loader, loss_fn):
     model.eval()
-    total = 0
+    total_loss = 0
     preds, trues = [], []
     with torch.no_grad():
         for batch in loader:
@@ -47,37 +47,41 @@ def eval_model(model, loader, loss_fn):
             params = batch["params"].to(DEVICE)
             pred = model(iv)
             loss = loss_fn(pred, params)
-            total += loss.item() * iv.size(0)
+            total_loss += loss.item() * iv.size(0)
             preds.append(pred.cpu().numpy())
             trues.append(params.cpu().numpy())
     preds = np.concatenate(preds, 0)
     trues = np.concatenate(trues, 0)
-    return total / len(loader.dataset), preds, trues
+    return total_loss / len(loader.dataset), preds, trues
 
 def main():
-    data = np.load("data/processed/converted_dataset.npz")
+    # 直接加载预处理后的数据
+    data_path = "data/processed/converted_dataset.npz"
+    norm_path = "data/processed/norm_stats.json"
+
+    data = np.load(data_path)
     iv, params = data["ivcv"], data["params"]
 
-    dataset = BSIMIVDataset(iv, params)
-    with open(NORMALIZE_META, "w") as f:
-        json.dump(dataset.norm_meta, f, indent=2)
+    with open(norm_path, "r") as f:
+        norm_stats = json.load(f)
 
-    n = len(dataset)
-    n_val = int(0.1 * n)
-    n_test = int(0.1 * n)
-    n_train = n - n_val - n_test
-    train_set, val_set, test_set = random_split(dataset, [n_train, n_val, n_test])
-    print(f"Dataset split: train={n_train}, val={n_val}, test={n_test}")
+    print(f"Loaded dataset: {iv.shape}, params: {params.shape}")
 
+    # 划分训练与验证集
+    x_train, x_val, y_train, y_val = split_train_val_data(iv, params, train_ratio=0.9)
+
+    train_set = BSIMIVDataset(x_train, y_train)
+    val_set = BSIMIVDataset(x_val, y_val)
     train_loader = DataLoader(train_set, batch_size=BATCH_SIZE, shuffle=True)
     val_loader = DataLoader(val_set, batch_size=BATCH_SIZE, shuffle=False)
-    test_loader =DataLoader(test_set, batch_size=BATCH_SIZE, shuffle=False)
 
-    model = ParamExtractorIVNet(input_dim=iv.shape[1], output_dim=3).to(DEVICE)
+    # 模型定义
+    model = ParamExtractorIVNet(input_dim=iv.shape[1]*iv.shape[2], output_dim=3).to(DEVICE)
     opt = torch.optim.Adam(model.parameters(), lr=LR)
     loss_fn = nn.MSELoss()
 
-    best_loss = 1e9
+    # 训练
+    best_loss = float("inf")
     patience = 0
     train_losses, val_losses = [], []
 
@@ -86,17 +90,20 @@ def main():
         val_loss, preds, trues = eval_model(model, val_loader, loss_fn)
         train_losses.append(train_loss)
         val_losses.append(val_loss)
+
         print(f"Epoch {epoch:03d} | train={train_loss:.6f} | val={val_loss:.6f}")
+
         if val_loss < best_loss:
             best_loss = val_loss
             patience = 0
-            torch.save({"model": model.state_dict(), "norm_meta": dataset.norm_meta}, MODEL_SAVE)
+            torch.save({"model": model.state_dict(), "norm_stats": norm_stats}, MODEL_SAVE)
         else:
             patience += 1
             if patience >= PATIENCE:
                 print("Early stopping")
                 break
-    print("Training done, best val loss =", best_loss)
+
+    print(f"训练完成，最佳验证损失: {best_loss:.6f}")
 
     # 绘制损失曲线
     plt.figure()
@@ -104,31 +111,23 @@ def main():
     plt.plot(val_losses, label="Val Loss")
     plt.xlabel("Epoch")
     plt.ylabel("MSE Loss")
-    plt.title("Training Curve")
     plt.legend()
     plt.tight_layout()
     plt.savefig("loss_curve.png")
     print("Saved training curve: loss_curve.png")
 
-    # 测试集评估
-    ckpt = torch.load(MODEL_SAVE, map_location=DEVICE)
-    model.load_state_dict(ckpt["model"])
-    test_loss, preds, trues = eval_model(model, test_loader, loss_fn)
-    print(f"Test loss = {test_loss:.6f}")
-
-    # 绘制预测 vs 真实参数散点图
-    plt.figure(figsize=(10, 4))
+    plt.figure(figsize=(9, 3))
     for i in range(3):
         plt.subplot(1, 3, i + 1)
-        plt.scatter(trues[:, i], preds[:, i], s=15, alpha=0.7)
+        plt.scatter(trues[:, i], preds[:, i], s=20, alpha=0.7)
         plt.plot([trues[:, i].min(), trues[:, i].max()],
                  [trues[:, i].min(), trues[:, i].max()], 'r--')
         plt.xlabel("True")
-        plt.ylabel("Predicted")
-        plt.title(f"Param {i + 1}")
+        plt.ylabel("Pred")
+        plt.title(f"Param {i+1}")
     plt.tight_layout()
     plt.savefig("pred_vs_true.png")
-    print("Saved prediction vs true scatter plot: pred_vs_true.png")
+    print("Saved: pred_vs_true.png")
 
 if __name__ == "__main__":
     main()

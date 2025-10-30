@@ -1,226 +1,255 @@
-# data_parser.py
-"""
-HSPICE .lis 文件解析器
-- 专为解析蒙特卡洛 (mc) .lis 文件而设计。
-- 使用正则表达式 (re) 提取每个 index 的 I-V (特征) 和参数 (标签)。
-- 将数据保存为 features.npy 和 labels.npy 供模型训练。
-"""
+import pickle
 import numpy as np
 import re
-from pathlib import Path
-from tqdm import tqdm
-
-# 导入全局配置
-from config import config
 
 
-def parse_value(value_str: str) -> float:
+def split_train_val_data(x_data, y_data, train_ratio=0.9, shuffle=True, random_state=42):
     """
-    将HSPICE的科学计数法 (如 '254.3500m', '93.9859k', '50.7286p') 转换为浮点数
+    划分训练集和验证集
+
+    参数:
+        x_data: 输入特征数据，形状为 (n_samples, ...)
+        y_data: 输出标签数据，形状为 (n_samples, ...)
+        train_ratio: 训练集比例，默认0.9（90%）
+        shuffle: 是否在划分前打乱数据，默认True
+        random_state: 随机种子，保证可重复性
+
+    返回:
+        x_train, x_val, y_train, y_val: 划分后的训练集和验证集
     """
-    value_str = value_str.strip()
-    suffixes = {
-        'p': 1e-12,
-        'n': 1e-9,
-        'u': 1e-6,
-        'm': 1e-3,
-        'k': 1e3,
-        'x': 1e6,  # 'x' 或 'meg'
-        'meg': 1e6,
-        'g': 1e9,
-        't': 1e12,
-    }
-    # 检查最后一个字符是否是已知的后缀
-    suffix = value_str[-1].lower()
-    if suffix in suffixes:
-        num_str = value_str[:-1]
-        return float(num_str) * suffixes[suffix]
+    n_samples = len(x_data)
+
+    # 确保输入数据长度一致
+    assert len(x_data) == len(y_data), "x_data和y_data的样本数量必须一致"
+
+    # 生成索引
+    indices = np.arange(n_samples)
+
+    # 是否打乱数据
+    if shuffle:
+        np.random.seed(random_state)
+        np.random.shuffle(indices)
+
+    # 计算训练集大小
+    train_size = int(n_samples * train_ratio)
+
+    # 划分索引
+    train_indices = indices[:train_size]
+    val_indices = indices[train_size:]
+
+    # 根据索引划分数据
+    x_train = x_data[train_indices]
+    x_val = x_data[val_indices]
+    y_train = y_data[train_indices]
+    y_val = y_data[val_indices]
+
+    # 打印划分结果
+    print(f"数据集划分完成:")
+    print(f"总样本数: {n_samples}")
+    print(f"训练集样本数: {len(x_train)} ({len(x_train) / n_samples * 100:.1f}%)")
+    print(f"验证集样本数: {len(x_val)} ({len(x_val) / n_samples * 100:.1f}%)")
+
+    return x_train, x_val, y_train, y_val
+
+
+def parse_hspice_mc_data(file_path):
+    with open(file_path, 'r') as file:
+        content = file.read()
+
+    # 使用正则表达式分割每次蒙特卡洛仿真产生的数据
+    mc_blocks = re.split(r'\*\*\* monte carlo\s+index\s*=\s*\d+\s*\*\*\*', content)[1:]
+
+    all_curves = []
+    all_params = []
+
+    for block in mc_blocks:
+        # 提取曲线数据 (x部分)
+        x_section = re.search(r'x\s+(.*?)y', block, re.DOTALL)
+        if x_section:
+            curve_data = []
+            lines = x_section.group(1).strip().split('\n')
+
+            # 跳过表头行，直接读取数据行
+            for line in lines:
+                line = line.strip()
+                if line and not any(keyword in line.lower() for keyword in ['volt', 'current', 'vd_linear', 'vd_sat']):
+                    # 分割行数据
+                    parts = line.split()
+                    if len(parts) >= 3:
+                        # 处理电压值
+                        volt_str = parts[0].lower()
+                        if volt_str.endswith('.'):
+                            volt = float(volt_str)
+                        elif 'm' in volt_str:
+                            volt = float(volt_str.replace('m', '')) * 1e-3
+                        else:
+                            volt = float(volt_str)
+
+                        # 处理线性区电流值
+                        current_linear_str = parts[1].lower()
+                        current_linear = convert_current_unit(current_linear_str)
+
+                        # 处理饱和区电流值
+                        current_sat_str = parts[2].lower()
+                        current_sat = convert_current_unit(current_sat_str)
+
+                        curve_data.append([volt, current_linear, current_sat])
+
+            # 将当前块的曲线数据添加到总列表中
+            if curve_data:
+                all_curves.append(curve_data)
+
+        # 提取参数数据 (y部分)
+        y_section = re.search(r'y\s+(.*?)(?:\*\*\*|$)', block, re.DOTALL)
+        if y_section:
+            params = []
+            lines = y_section.group(1).strip().split('\n')
+
+            for line in lines:
+                line = line.strip()
+                if 'vth0_value=' in line:
+                    match = re.search(r'vth0_value=\s*([-\d.]+[mku]?)', line)
+                    if match:
+                        value_str = match.group(1).lower()
+                        if 'm' in value_str:
+                            vth0 = float(value_str.replace('m', '')) * 1e-3
+                        else:
+                            vth0 = float(value_str)
+                        params.append(vth0)
+
+                elif 'u0_param=' in line:
+                    match = re.search(r'u0_param=\s*([-\d.]+[mku]?)', line)
+                    if match:
+                        value_str = match.group(1).lower()
+                        if 'm' in value_str:
+                            u0 = float(value_str.replace('m', '')) * 1e-3
+                        else:
+                            u0 = float(value_str)
+                        params.append(u0)
+
+                elif 'vsat_param=' in line:
+                    match = re.search(r'vsat_param=\s*([-\d.]+[mku]?)', line)
+                    if match:
+                        value_str = match.group(1).lower()
+                        if 'k' in value_str:
+                            vsat = float(value_str.replace('k', '')) * 1e3
+                        else:
+                            vsat = float(value_str)
+                        params.append(vsat)
+
+            if len(params) == 3:
+                all_params.append(params)
+
+    return all_curves, all_params
+
+
+def convert_current_unit(current_str):
+    """转换电流单位"""
+    if 'p' in current_str:
+        return float(current_str.replace('p', '')) * 1e-12
+    elif 'n' in current_str:
+        return float(current_str.replace('n', '')) * 1e-9
+    elif 'u' in current_str:
+        return float(current_str.replace('u', '')) * 1e-6
+    elif 'm' in current_str:
+        return float(current_str.replace('m', '')) * 1e-3
     else:
-        # 可能是 'e+' 或 'e-' 格式
-        try:
-            return float(value_str)
-        except ValueError:
-            print(f"警告: 无法解析的值 '{value_str}'，返回 0.0")
-            return 0.0
+        return float(current_str)
 
 
-class HspiceLisParser:
+def prepare_deep_learning_data(curves, params):
+    # 转换为numpy数组
+    x_num = np.array(curves, dtype=np.float32)  # 形状: (样本数, 21, 3)
+    y_num = np.array(params, dtype=np.float32)  # 形状: (样本数, 3)
+
+    print(f"输入数据形状: {x_num.shape}")  # 应该是 (n_samples, 21, 3)
+    print(f"输出数据形状: {y_num.shape}")  # 应该是 (n_samples, 3)
+
+    print(f"样本电压范围: {x_num[:, :, 0].min():.3f}V 到 {x_num[:, :, 0].max():.3f}V")
+    print(f"样本线性区电流范围: {x_num[:, :, 1].min():.3e}A 到 {x_num[:, :, 1].max():.3e}A")
+    print(f"样本饱和区电流范围: {x_num[:, :, 2].min():.3e}A 到 {x_num[:, :, 2].max():.3e}A")
+    print(f"样本Vth0范围: {y_num[:, 0].min():.6f} 到 {y_num[:, 0].max():.6f}")
+    print(f"样本U0范围: {y_num[:, 1].min():.6f} 到 {y_num[:, 1].max():.6f}")
+    print(f"样本Vsat范围: {y_num[:, 2].min():.2f} 到 {y_num[:, 2].max():.2f}")
+
+    return x_num, y_num
+
+
+def normalize_monte_carlo_data(all_curves, all_params):
     """
-    解析 mc.lis 文件的主类
+    对蒙特卡洛数据进行对数化和Z-Score标准化处理
+
+    参数:
+        all_curves: 从parse_hspice_mc_data返回的曲线数据
+        all_params: 从parse_hspice_mc_data返回的参数数据
+
+    返回:
+        normalized_curves: 归一化后的曲线数据
+        normalized_params: 归一化后的参数数据
+        normalization_stats: 用于逆变换的统计量字典
     """
+    # 转换为numpy数组以便处理
+    curves_array = np.array(all_curves)  # 形状: (n_simulations, n_points, 3)
+    params_array = np.array(all_params)  # 形状: (n_simulations, 3)
 
-    def __init__(self, output_params_list):
-        # 匹配我们关心的参数
-        # (这部分需要根据您的 .lis 文件 y 块中的参数名进行定制)
-        # 从 mc.lis 文件看，参数名是 'vth0_value', 'u0_param', 'vsat_param'
+    # 分离各个分量
+    volt_data = curves_array[:, :, 0]  # 电压
+    i_linear_data = curves_array[:, :, 1]  # 线性区电流
+    i_sat_data = curves_array[:, :, 2]  # 饱和区电流
 
-        # 我们的 config.py 使用的是BSIM标准名，这里我们做一个映射
-        self.param_map = {
-            'vth0_value': 'VTH0',
-            'u0_param': 'U0',
-            'vsat_param': 'VSAT',
-            # TODO: 如果 config.py 中的 'PHIG', 'RDSW', 'CIT' 也在 .lis 中
-            # 请在这里添加它们的映射，例如: 'phig_param': 'PHIG'
-        }
+    # 1. 电压归一化 (Min-Max到[0,1])
+    volt_min = np.min(volt_data)
+    volt_max = np.max(volt_data)
+    volt_normalized = (volt_data - volt_min) / (volt_max - volt_min)
 
-        # 我们要查找的参数名 (在.lis文件中的)
-        self.target_lis_params = list(self.param_map.keys())
-        # 我们期望的输出顺序 (在config.py中定义的)
-        self.output_order = output_params_list
+    # 2. 电流对数变换 + Z-Score标准化
+    # 为避免对数0，给一个很小的偏移量
+    epsilon = 1e-20
 
-        # --- 正则表达式 ---
+    # 线性区电流处理
+    log_i_linear = np.log10(i_linear_data + epsilon)
+    log_i_linear_mean = np.mean(log_i_linear)
+    log_i_linear_std = np.std(log_i_linear)
+    i_linear_normalized = (log_i_linear - log_i_linear_mean) / log_i_linear_std
 
-        # 1. 匹配每个 MC index 块
-        self.re_mc_block = re.compile(
-            r"\*\*\* monte carlo +index = +(\d+) \*\*\*(.*?)(?=\*\*\* monte carlo|\Z)",
-            re.DOTALL  # re.DOTALL 使 '.' 匹配换行符
-        )
+    # 饱和区电流处理
+    log_i_sat = np.log10(i_sat_data + epsilon)
+    log_i_sat_mean = np.mean(log_i_sat)
+    log_i_sat_std = np.std(log_i_sat)
+    i_sat_normalized = (log_i_sat - log_i_sat_mean) / log_i_sat_std
 
-        # 2. 匹配 I-V 数据 (x 块)
-        # 匹配 volt 和 i drn 之后的所有数据行
-        self.re_iv_data = re.compile(
-            r"x\n\n *volt *i drn *\n.*?m1 *\n(.*?)\ny\n",
-            re.DOTALL
-        )
+    # 3. 参数归一化 (Z-Score)
+    params_mean = np.mean(params_array, axis=0)
+    params_std = np.std(params_array, axis=0)
+    params_normalized = (params_array - params_mean) / params_std
 
-        # 3. 匹配参数数据 (y 块)
-        # 我们动态构建这个
-        self.re_params = []
-        for param_name in self.target_lis_params:
-            # 匹配 "param_name= 123.45m" 这样的格式
-            self.re_params.append(
-                (param_name, re.compile(r"{}=\s*([\w.+-]+)".format(param_name)))
-            )
+    # 组合归一化后的曲线数据
+    normalized_curves = np.stack([volt_normalized, i_linear_normalized, i_sat_normalized], axis=2)
 
-    def parse(self, lis_content: str):
-        """
-        执行解析
-        """
-        features_list = []
-        labels_list = []
+    # 保存用于逆变换的统计量
+    normalization_stats = {
+        'volt': {'min': volt_min, 'max': volt_max},
+        'i_linear': {'log_mean': log_i_linear_mean, 'log_std': log_i_linear_std},
+        'i_sat': {'log_mean': log_i_sat_mean, 'log_std': log_i_sat_std},
+        'params': {'mean': params_mean, 'std': params_std},
+        'epsilon': epsilon
+    }
 
-        # 1. 拆分 MC 块
-        mc_blocks = self.re_mc_block.findall(lis_content)
-        if not mc_blocks:
-            print("❌ 错误: 未在文件中找到任何 '*** monte carlo index = ... ***' 块。")
-            return None, None
-
-        print(f"🔍 找到 {len(mc_blocks)} 个 Monte Carlo 样本。开始解析...")
-
-        for index, block_content in tqdm(mc_blocks, desc="解析 .lis 文件"):
-
-            # 2. 提取 I-V 数据
-            iv_match = self.re_iv_data.search(block_content)
-            if not iv_match:
-                print(f"警告: 在 Index {index} 中未找到 I-V 数据块 (x...y)。跳过...")
-                continue
-
-            iv_data_str = iv_match.group(1).strip()
-            current_values = []
-
-            # 2.1 解析 I-V 数据行
-            for line in iv_data_str.split('\n'):
-                parts = line.strip().split()
-                if len(parts) == 2:
-                    # parts[0] 是 volt, parts[1] 是 i drn
-                    current_values.append(parse_value(parts[1]))
-
-            # TODO: 验证 I-V 数据点数是否与 config.py 一致
-            # (暂时不验证，但未来可以添加)
-
-            features_list.append(current_values)
-
-            # 3. 提取参数数据
-            label_dict_raw = {}
-            for param_name, re_c in self.re_params:
-                param_match = re_c.search(block_content)
-                if param_match:
-                    label_dict_raw[param_name] = parse_value(param_match.group(1))
-
-            if not label_dict_raw:
-                print(f"警告: 在 Index {index} 中未找到任何参数 (y 块)。跳过...")
-                continue
-
-            # 4. 按 config.py 中的顺序排列标签
-            label_ordered = []
-            for out_param in self.output_order:
-                found = False
-                for lis_name, bsim_name in self.param_map.items():
-                    if bsim_name == out_param:
-                        if lis_name in label_dict_raw:
-                            label_ordered.append(label_dict_raw[lis_name])
-                            found = True
-                            break
-                if not found:
-                    print(f"警告: Config 需要参数 '{out_param}'，但在 .lis (y 块) 中未定义映射或未找到。")
-                    # 我们暂时用 0.0 填充，但这表明 config 和 parser 需要同步
-                    label_ordered.append(0.0)
-
-            labels_list.append(label_ordered)
-
-        if not features_list or not labels_list:
-            print("❌ 错误: 解析完成，但未提取到任何有效数据。")
-            return None, None
-
-        print(f"\n✓ 解析成功! 提取了 {len(features_list)} 组数据。")
-
-        # 转换为 Numpy 数组
-        features_np = np.array(features_list)
-        labels_np = np.array(labels_list)
-
-        print(f"  特征 (X) 形状: {features_np.shape}")
-        print(f"  标签 (Y) 形状: {labels_np.shape}")
-
-        return features_np, labels_np
+    return normalized_curves, params_normalized, normalization_stats
 
 
-def main(lis_file_path: Path, output_dir: Path):
-    """
-    主函数：读取 .lis, 解析, 保存 .npy
-    """
-    print(f"📄 开始解析 .lis 文件: {lis_file_path}")
-
-    # 确保输出目录存在
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    try:
-        content = lis_file_path.read_text(encoding='utf-8')
-    except UnicodeDecodeError:
-        # 如果 utf-8 失败，尝试 latin1
-        print("⚠️ UTF-8 读取失败，尝试使用 latin1 编码...")
-        content = lis_file_path.read_text(encoding='latin1')
-    except FileNotFoundError:
-        print(f"❌ 错误: 文件未找到 {lis_file_path}")
-        return
-    except Exception as e:
-        print(f"❌ 错误: 读取文件时出错: {e}")
-        return
-
-    # 初始化解析器
-    # 我们从 config.py 传入期望的参数列表
-    parser = HspiceLisParser(output_params_list=config.output_params)
-    features, labels = parser.parse(content)
-
-    if features is not None and labels is not None:
-        # 保存 .npy 文件
-        feature_path = output_dir / 'features.npy'
-        label_path = output_dir / 'labels.npy'
-
-        np.save(feature_path, features)
-        np.save(label_path, labels)
-
-        print(f"\n✓ 数据已保存:")
-        print(f"  特征 -> {feature_path}")
-        print(f"  标签 -> {label_path}")
-
-
+# 使用示例
 if __name__ == "__main__":
-    # --- 如何运行 ---
-    # 1. 把你的 mc.lis 文件放到一个地方, 例如 'data/' 目录
-    # 2. 在下面设置路径
-    # 3. 直接运行 `python data_parser.py`
 
-    L_FILE_PATH = Path("bsim_datasets/mc.lis")  # <--- 修改这里: 你的.lis文件路径
-    NPY_OUTPUT_DIR = Path("data/processed")  # <--- 修改这里: .npy的保存路径
+    curves, params = parse_hspice_mc_data(r"bsim_datasets/mc.lis")
 
-    main(L_FILE_PATH, NPY_OUTPUT_DIR)
+    x_data, y_data = prepare_deep_learning_data(curves, params)
+
+    x_normalized, y_normalized, stats = normalize_monte_carlo_data(curves, params)
+
+    x_train, x_val, y_train, y_val = split_train_val_data(x_normalized, y_normalized, train_ratio=0.9)
+
+    print(f"\n训练集输入形状: {x_train.shape}")
+    print(f"训练集输出形状: {y_train.shape}")
+    print(f"验证集输入形状: {x_val.shape}")
+    print(f"验证集输出形状: {y_val.shape}")

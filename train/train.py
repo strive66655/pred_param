@@ -76,7 +76,7 @@ def main(args):
     model = ParamExtractorNet(hidden_size=args.hidden_size, num_hidden=args.num_hidden).to(device)
     opt = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=1e-6)
     loss_fn = nn.MSELoss()
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(opt, mode='min', factor=0.5, patience=5)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(opt, mode='min', factor=0.8, patience=6)
     early = EarlyStopping(patience=args.patience)
 
     best_val = float('inf')
@@ -109,7 +109,7 @@ if __name__ == '__main__':
     parser.add_argument('--epochs', type=int, default=100)
     parser.add_argument('--hidden_size', type=int, default=1024)
     parser.add_argument('--num_hidden', type=int, default=3)
-    parser.add_argument('--patience', type=int, default=15)
+    parser.add_argument('--patience', type=int, default=25)
     args = parser.parse_args()
     main(args)
 
