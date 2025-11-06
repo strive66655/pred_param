@@ -12,16 +12,17 @@ from tqdm import tqdm
 
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
+from bsim_datasets.config import config
 from bsim_datasets.bsim_iv_dataset import BSIMIVDataset
 from models.param_extractor_iv import ParamExtractorIVNet
 
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-LR = 1e-4
-BATCH_SIZE = 64
-NUM_EPOCHS = 200
-PATIENCE = 15
-MODEL_SAVE = "best_iv_extractor.pth"
-NORMALIZE_META = "iv_norm_meta.json"
+DEVICE = config.device
+LR = config.learning_rate
+BATCH_SIZE = config.batch_size
+NUM_EPOCHS = config.epochs
+PATIENCE = config.early_stopping_patience
+MODEL_SAVE = config.model_dir / "best_iv_extractor.pth"
+NORMALIZE_META = config.model_dir / "iv_norm_meta.json"
 
 def train_one_epoch(model, loader, opt, loss_fn):
     model.train()
@@ -54,13 +55,37 @@ def eval_model(model, loader, loss_fn):
     trues = np.concatenate(trues, 0)
     return total / len(loader.dataset), preds, trues
 
+def visionlizaion(train_losses, val_losses, trues, preds):
+    # 绘制损失曲线
+    plt.figure()
+    plt.plot(train_losses, label="Train Loss")
+    plt.plot(val_losses, label="Val Loss")
+    plt.xlabel("Epoch")
+    plt.ylabel("MSE Loss")
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(config.plot_dir/"loss_curve.png")
+    print("Saved training curve: loss_curve.png")
+
+    param = config.output_params
+    plt.figure(figsize=(9, 3))
+    for i in range(3):
+        plt.subplot(1, 3, i + 1)
+        plt.scatter(trues[:, i], preds[:, i], s=20, alpha=0.7)
+        plt.plot([trues[:, i].min(), trues[:, i].max()],
+                 [trues[:, i].min(), trues[:, i].max()], 'r--')
+        plt.xlabel("True")
+        plt.ylabel("Pred")
+        plt.title(f"{param[i]}")
+    plt.tight_layout()
+    plt.savefig(config.plot_dir/"pred_vs_true.png")
+    print("Saved: pred_vs_true.png")
+
 def main():
     data = np.load("data/processed/converted_dataset.npz")
     iv, params = data["ivcv"], data["params"]
 
-    dataset = BSIMIVDataset(iv, params)
-    with open(NORMALIZE_META, "w") as f:
-        json.dump(dataset.norm_meta, f, indent=2)
+    dataset = BSIMIVDataset(iv, params, save_meta_path=NORMALIZE_META)
 
     n = len(dataset)
     n_val = int(0.1 * n)
@@ -86,11 +111,12 @@ def main():
         val_loss, preds, trues = eval_model(model, val_loader, loss_fn)
         train_losses.append(train_loss)
         val_losses.append(val_loss)
-        print(f"Epoch {epoch:03d} | train={train_loss:.6f} | val={val_loss:.6f}")
+        print(f"Epoch {epoch:03d} | Train Loss={train_loss:.6f} | Val Loss={val_loss:.6f}")
         if val_loss < best_loss:
             best_loss = val_loss
             patience = 0
             torch.save({"model": model.state_dict(), "norm_meta": dataset.norm_meta}, MODEL_SAVE)
+            print(f"保存最佳模型 (Val Loss: {val_loss:.6f})")
         else:
             patience += 1
             if patience >= PATIENCE:

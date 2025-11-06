@@ -1,17 +1,18 @@
-import torch
+# models/param_extractor_iv.py
 import torch.nn as nn
 
+
 class ParamExtractorIVNet(nn.Module):
-    def __init__(self, input_dim=21, hidden_size=512, num_hidden=3, output_dim=3, dropout=0.0):
+    def __init__(self, input_dim=63, hidden_layers=[1024, 512, 256], output_dim=3, dropout=0.2):
         super().__init__()
-        layers = [nn.Linear(input_dim, hidden_size), nn.ReLU()]
-        for _ in range(num_hidden - 1):
-            layers += [nn.Linear(hidden_size, hidden_size), nn.ReLU()]
-            if dropout > 0:
-                layers.append(nn.Dropout(dropout))
-        layers.append(nn.Linear(hidden_size, output_dim))
+        layers = []
+        prev_dim = input_dim
+        for hidden_dim in hidden_layers:
+            layers += [nn.Linear(prev_dim, hidden_dim), nn.ReLU(), nn.Dropout(dropout)]
+            prev_dim = hidden_dim
+        layers.append(nn.Linear(prev_dim, output_dim))
         self.net = nn.Sequential(*layers)
-        self.output_act = nn.Sigmoid()  # 因为数据归一化到了 [0,1]
+        self.output_act = nn.Identity()
 
     def forward(self, x):
         x = x.view(x.size(0), -1)

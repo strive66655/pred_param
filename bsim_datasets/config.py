@@ -22,18 +22,18 @@ class ExperimentConfig:
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
         # ===== 路径配置 =====
-        self.output_dir = Path("../data/experiments") / self.experiment_name
+        self.output_dir = Path("experiments") / self.experiment_name
         self.model_dir = self.output_dir / "models"
         self.log_dir = self.output_dir / "logs"
         self.plot_dir = self.output_dir / "plots"
 
         # ===== 数据配置 (当前任务) =====
         # (基于 mc.lis 文件的真实结构)
-        self.num_curves = 1  # .lis 文件每个index只有1条 I-V 曲线
+        self.num_curves = 1 # .lis 文件每个index只有1条 I-V 曲线
         self.vg_points = 21  # 每条曲线有 21 个点 (0V 到 1.0V)
         self.num_lg = 1  # 这个 .lis 文件似乎是单个Lg的MC，而不是全局的
         # 总输入特征维度 = 1 * 21 * 1 = 21
-        self.input_dim = self.num_curves * self.vg_points * self.num_lg
+        self.input_dim = 63
 
         # 我们只提取 .lis 文件中真实存在的参数
         self.output_params = ['VTH0', 'U0', 'VSAT']  # 必须与 data_parser.py 的映射一致
