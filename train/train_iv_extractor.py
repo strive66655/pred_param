@@ -103,7 +103,8 @@ def main():
     val_loader = DataLoader(val_set, batch_size=BATCH_SIZE, shuffle=False)
 
     # 模型定义
-    model = ParamExtractorIVNet(input_dim=config.input_dim, output_dim=config.output_dim).to(DEVICE)
+    model = ParamExtractorIVNet(input_dim=config.input_dim, hidden_layers=config.mlp_layers,
+                                output_dim=config.output_dim, dropout=config.dropout_rate).to(DEVICE)
     opt = torch.optim.Adam(model.parameters(), lr=LR)
     loss_fn = nn.MSELoss()
 
@@ -122,13 +123,13 @@ def main():
 
         if val_loss < best_loss:
             best_loss = val_loss
-            # patience = 0
+            patience = 0
             torch.save({"model": model.state_dict(), "norm_stats": norm_stats}, MODEL_SAVE)
-        # else:
-        #     patience += 1
-        #     if patience >= PATIENCE:
-        #         print("Early stopping")
-        #         break
+        else:
+            patience += 1
+            if patience >= PATIENCE:
+                print("Early stopping")
+                break
 
     print(f"训练完成，最佳验证损失: {best_loss:.6f}")
     visionlizaion(train_losses, val_losses, trues, preds)
