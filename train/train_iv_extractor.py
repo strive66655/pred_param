@@ -98,7 +98,8 @@ def main():
     val_loader = DataLoader(val_set, batch_size=BATCH_SIZE, shuffle=False)
     test_loader =DataLoader(test_set, batch_size=BATCH_SIZE, shuffle=False)
 
-    model = ParamExtractorIVNet(input_dim=iv.shape[1], output_dim=3).to(DEVICE)
+    model = ParamExtractorIVNet(input_dim=config.input_dim, hidden_layers=config.mlp_layers,
+                                output_dim=config.output_dim, dropout=config.dropout_rate).to(DEVICE)
     opt = torch.optim.Adam(model.parameters(), lr=LR)
     loss_fn = nn.MSELoss()
 
@@ -133,7 +134,7 @@ def main():
     plt.title("Training Curve")
     plt.legend()
     plt.tight_layout()
-    plt.savefig("loss_curve.png")
+    plt.savefig(config.plot_dir/"loss_curve.png")
     print("Saved training curve: loss_curve.png")
 
     # 测试集评估
@@ -153,7 +154,7 @@ def main():
         plt.ylabel("Predicted")
         plt.title(f"Param {i + 1}")
     plt.tight_layout()
-    plt.savefig("pred_vs_true.png")
+    plt.savefig(config.plot_dir/"pred_vs_true.png")
     print("Saved prediction vs true scatter plot: pred_vs_true.png")
 
 if __name__ == "__main__":

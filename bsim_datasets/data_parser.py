@@ -110,6 +110,7 @@ class HspiceLisParser:
 
             # (!!! 关键修改 !!!)
             # 我们现在需要为两条曲线分别创建列表
+            voltages = []
             linear_currents = []
             sat_currents = []
 
@@ -118,6 +119,7 @@ class HspiceLisParser:
                 parts = line.strip().split()
                 if len(parts) == 3:  # 检查是否有 3 列 (volt, i_linear, i_sat)
                     try:
+                        voltages.append(parse_value(parts[0]))
                         linear_currents.append(parse_value(parts[1]))  # 第 2 列
                         sat_currents.append(parse_value(parts[2]))  # 第 3 列
                     except Exception as e:
@@ -126,8 +128,8 @@ class HspiceLisParser:
             # 2.2 (!!! 关键修改 !!!)
             # 将两条曲线拼接成一个特征向量
             # [i_linear_1, ..., i_linear_21, i_sat_1, ..., i_sat_21]
-            if linear_currents and sat_currents:
-                combined_features = linear_currents + sat_currents
+            if voltages and linear_currents and sat_currents:
+                combined_features = voltages + linear_currents + sat_currents
                 features_list.append(combined_features)
             else:
                 print(f"警告: 在 Index {index} 中未提取到足够的 I-V 数据。跳过...")
