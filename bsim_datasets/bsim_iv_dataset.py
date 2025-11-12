@@ -47,7 +47,6 @@ class BSIMIVDataset(Dataset):
 
     def _apply_norm(self):
         """对 IV 和参数进行 Min-Max 归一化"""
-
         # 1. IV 数据逐特征归一化
         iv_min = np.array(self.norm_meta["iv_min"], dtype=np.float32)
         iv_max = np.array(self.norm_meta["iv_max"], dtype=np.float32)

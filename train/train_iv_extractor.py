@@ -9,6 +9,7 @@ import numpy as np
 from matplotlib import pyplot as plt
 from torch.utils.data import DataLoader, random_split
 from tqdm import tqdm
+import seaborn as sns
 
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
@@ -55,31 +56,45 @@ def eval_model(model, loader, loss_fn):
     trues = np.concatenate(trues, 0)
     return total / len(loader.dataset), preds, trues
 
-def visionlizaion(train_losses, val_losses, trues, preds):
-    # 绘制损失曲线
-    plt.figure()
-    plt.plot(train_losses, label="Train Loss")
-    plt.plot(val_losses, label="Val Loss")
-    plt.xlabel("Epoch")
-    plt.ylabel("MSE Loss")
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(config.plot_dir/"loss_curve.png")
-    print("Saved training curve: loss_curve.png")
 
+def visualization(train_losses, val_losses, trues, preds):
     param = config.output_params
-    plt.figure(figsize=(9, 3))
-    for i in range(3):
-        plt.subplot(1, 3, i + 1)
-        plt.scatter(trues[:, i], preds[:, i], s=20, alpha=0.7)
-        plt.plot([trues[:, i].min(), trues[:, i].max()],
-                 [trues[:, i].min(), trues[:, i].max()], 'r--')
-        plt.xlabel("True")
-        plt.ylabel("Pred")
-        plt.title(f"{param[i]}")
+
+    # --- 绘制损失曲线 ---
+    plt.figure(figsize=(8, 5))
+    plt.plot(train_losses, label="Train Loss", color='tab:blue', linewidth=2)
+    plt.plot(val_losses, label="Validation Loss", color='tab:orange', linewidth=2)
+    plt.xlabel("Epoch", fontsize=12)
+    plt.ylabel("MSE Loss", fontsize=12)
+    plt.title("Training & Validation Loss", fontsize=14)
+    plt.legend(fontsize=11)
+    plt.grid(True, linestyle='--', alpha=0.5)
     plt.tight_layout()
-    plt.savefig(config.plot_dir/"pred_vs_true.png")
+    plt.savefig(config.plot_dir / "loss_curve.png", dpi=300)
+    print("Saved training curve: loss_curve.png")
+    plt.close()
+
+    # --- 绘制预测 vs 真值散点图 ---
+    plt.figure(figsize=(12, 4))
+    for i in range(len(param)):
+        plt.subplot(1, len(param), i + 1)
+        plt.scatter(trues[:, i], preds[:, i], s=30, alpha=0.7, color='tab:blue', edgecolors='k')
+        # 对角线
+        min_val = min(trues[:, i].min(), preds[:, i].min())
+        max_val = max(trues[:, i].max(), preds[:, i].max())
+        plt.plot([min_val, max_val], [min_val, max_val], 'r--', linewidth=2)
+        plt.xlabel("True", fontsize=11)
+        plt.ylabel("Pred", fontsize=11)
+        plt.title(f"{param[i]}", fontsize=12)
+        plt.grid(True, linestyle='--', alpha=0.3)
+        # 设置横轴不挤，自动调整
+        plt.xticks(rotation=30)
+        plt.tight_layout()
+
+    plt.savefig(config.plot_dir / "pred_vs_true.png", dpi=300)
     print("Saved: pred_vs_true.png")
+    plt.close()
+
 
 def main():
     data = np.load("data/processed/converted_dataset.npz")
@@ -89,14 +104,12 @@ def main():
 
     n = len(dataset)
     n_val = int(0.1 * n)
-    n_test = int(0.1 * n)
-    n_train = n - n_val - n_test
-    train_set, val_set, test_set = random_split(dataset, [n_train, n_val, n_test])
-    print(f"Dataset split: train={n_train}, val={n_val}, test={n_test}")
+    n_train = n - n_val
+    train_set, val_set= random_split(dataset, [n_train, n_val])
+    print(f"Dataset split: train={n_train}, val={n_val}")
 
     train_loader = DataLoader(train_set, batch_size=BATCH_SIZE, shuffle=True)
     val_loader = DataLoader(val_set, batch_size=BATCH_SIZE, shuffle=False)
-    test_loader =DataLoader(test_set, batch_size=BATCH_SIZE, shuffle=False)
 
     model = ParamExtractorIVNet(input_dim=config.input_dim, hidden_layers=config.mlp_layers,
                                 output_dim=config.output_dim, dropout=config.dropout_rate).to(DEVICE)
@@ -125,37 +138,6 @@ def main():
                 break
     print("Training done, best val loss =", best_loss)
 
-    # 绘制损失曲线
-    plt.figure()
-    plt.plot(train_losses, label="Train Loss")
-    plt.plot(val_losses, label="Val Loss")
-    plt.xlabel("Epoch")
-    plt.ylabel("MSE Loss")
-    plt.title("Training Curve")
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(config.plot_dir/"loss_curve.png")
-    print("Saved training curve: loss_curve.png")
-
-    # 测试集评估
-    ckpt = torch.load(MODEL_SAVE, map_location=DEVICE)
-    model.load_state_dict(ckpt["model"])
-    test_loss, preds, trues = eval_model(model, test_loader, loss_fn)
-    print(f"Test loss = {test_loss:.6f}")
-
-    # 绘制预测 vs 真实参数散点图
-    plt.figure(figsize=(10, 4))
-    for i in range(3):
-        plt.subplot(1, 3, i + 1)
-        plt.scatter(trues[:, i], preds[:, i], s=15, alpha=0.7)
-        plt.plot([trues[:, i].min(), trues[:, i].max()],
-                 [trues[:, i].min(), trues[:, i].max()], 'r--')
-        plt.xlabel("True")
-        plt.ylabel("Predicted")
-        plt.title(f"Param {i + 1}")
-    plt.tight_layout()
-    plt.savefig(config.plot_dir/"pred_vs_true.png")
-    print("Saved prediction vs true scatter plot: pred_vs_true.png")
-
+    visualization(train_losses, val_losses, trues, preds)
 if __name__ == "__main__":
     main()

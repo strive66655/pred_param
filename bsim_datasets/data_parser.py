@@ -56,13 +56,11 @@ class HspiceLisParser:
         self.param_map = {
             'vth0_value': 'VTH0',
             'u0_param': 'U0',
-            'vsat_param': 'VSAT',
+            'ags_param': 'AGS',
         }
 
         self.target_lis_params = list(self.param_map.keys())
         self.output_order = output_params_list
-
-        # --- 正则表达式 ---
 
         # 1. 匹配 MC index 块 (不变)
         self.re_mc_block = re.compile(
@@ -70,23 +68,28 @@ class HspiceLisParser:
             re.DOTALL
         )
 
-        # 2. (!!! 关键修改 !!!) 匹配 I-V 数据 (x 块)
-        # 匹配新的表头: volt param param \n i_linear i_sat
+        # 2. 匹配 I-V 数据 (x 块) -- 修改后的表头
         self.re_iv_data = re.compile(
-            r"x\n\n *volt *param *param *\n *i_linear *i_sat *\n(.*?)\ny\n",
-            re.DOTALL | re.IGNORECASE  # re.IGNORECASE 增加鲁棒性
+            r"x\s*\n"  # 匹配 x 行
+            r"\s*volt\s+param\s*\n"  # 表头第一行
+            r"\s*i_d_\d+(?:\.\d+)?\s*\n"    # 表头第二行
+            r"(.*?)"  # 捕获中间数据
+            r"\s*y",  # y 行结尾
+            re.DOTALL | re.IGNORECASE
         )
 
-        # 3. 匹配参数数据 (y 块) (不变)
+        # 3. 匹配参数数据 (y 块)
         self.re_params = []
         for param_name in self.target_lis_params:
+            # 匹配形式 param_name= 数值(带单位)
             self.re_params.append(
-                (param_name, re.compile(r"{}=\s*([\w.+-]+)".format(param_name)))
+                (param_name, re.compile(r"{}=\s*([\d.+-]+[pnumk]?)".format(param_name)))
             )
 
     def parse(self, lis_content: str):
         """
-        执行解析
+        解析 .lis 文件，提取 Monte Carlo 样本的 I-V 特征和参数标签。
+        支持任意数量的电流列 (i_d_*)。
         """
         features_list = []
         labels_list = []
@@ -100,42 +103,42 @@ class HspiceLisParser:
 
         for index, block_content in tqdm(mc_blocks, desc="解析 .lis 文件"):
 
-            # 2. (!!! 关键修改 !!!) 提取 I-V 数据
+            # --- 提取 I-V 数据 ---
             iv_match = self.re_iv_data.search(block_content)
             if not iv_match:
-                print(f"警告: 在 Index {index} 中未找到 I-V 数据块 (x...y)。跳过...")
+                print(f"⚠️ 警告: Index {index} 中未找到 I-V 数据块，跳过...")
                 continue
 
             iv_data_str = iv_match.group(1).strip()
 
-            # (!!! 关键修改 !!!)
-            # 我们现在需要为两条曲线分别创建列表
             voltages = []
-            linear_currents = []
-            sat_currents = []
+            currents_list = []  # 支持多条电流曲线
 
-            # 2.1 解析 I-V 数据行
+            # --- 解析 I-V 数据行 ---
             for line in iv_data_str.split('\n'):
                 parts = line.strip().split()
-                if len(parts) == 3:  # 检查是否有 3 列 (volt, i_linear, i_sat)
+                if len(parts) >= 2:
                     try:
                         voltages.append(parse_value(parts[0]))
-                        linear_currents.append(parse_value(parts[1]))  # 第 2 列
-                        sat_currents.append(parse_value(parts[2]))  # 第 3 列
+                        # 动态扩展电流曲线列表
+                        while len(currents_list) < len(parts) - 1:
+                            currents_list.append([])
+                        for i, val in enumerate(parts[1:]):
+                            currents_list[i].append(parse_value(val))
                     except Exception as e:
-                        print(f"警告: 在 Index {index} 中解析行失败: {line} -> {e}")
+                        print(f"⚠️ Index {index} 解析行失败: {line} -> {e}")
 
-            # 2.2 (!!! 关键修改 !!!)
-            # 将两条曲线拼接成一个特征向量
-            # [i_linear_1, ..., i_linear_21, i_sat_1, ..., i_sat_21]
-            if voltages and linear_currents and sat_currents:
-                combined_features = voltages + linear_currents + sat_currents
-                features_list.append(combined_features)
-            else:
-                print(f"警告: 在 Index {index} 中未提取到足够的 I-V 数据。跳过...")
+            if not voltages or not currents_list:
+                print(f"⚠️ Index {index} 未提取到有效 I-V 数据，跳过...")
                 continue
 
-            # 3. 提取参数数据 (不变)
+            # --- 拼接特征向量 ---
+            combined_features = voltages.copy()
+            for curve in currents_list:
+                combined_features.extend(curve)
+            features_list.append(combined_features)
+
+            # --- 提取参数数据 ---
             label_dict_raw = {}
             for param_name, re_c in self.re_params:
                 param_match = re_c.search(block_content)
@@ -143,12 +146,11 @@ class HspiceLisParser:
                     label_dict_raw[param_name] = parse_value(param_match.group(1))
 
             if not label_dict_raw:
-                print(f"警告: 在 Index {index} 中未找到任何参数 (y 块)。跳过...")
-                # 移除刚刚添加的特征，确保 X 和 Y 对齐
-                features_list.pop()
+                print(f"⚠️ Index {index} 中未找到任何参数，跳过...")
+                features_list.pop()  # 移除特征以保持 X/Y 对齐
                 continue
 
-            # 4. 按 config.py 中的顺序排列标签 (不变)
+            # --- 按 output_order 排序标签 ---
             label_ordered = []
             for out_param in self.output_order:
                 found = False

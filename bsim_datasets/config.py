@@ -33,10 +33,10 @@ class ExperimentConfig:
         self.vg_points = 21  # 每条曲线有 21 个点 (0V 到 1.0V)
         self.num_lg = 1  # 这个 .lis 文件似乎是单个Lg的MC，而不是全局的
         # 总输入特征维度 = 1 * 21 * 1 = 21
-        self.input_dim = 63
+        self.input_dim = 231
 
         # 我们只提取 .lis 文件中真实存在的参数
-        self.output_params = ['VTH0', 'U0', 'VSAT']  # 必须与 data_parser.py 的映射一致
+        self.output_params = ['VTH0', 'U0', 'AGS']  # 必须与 data_parser.py 的映射一致
         self.output_dim = len(self.output_params)  # output_dim 现在是 3
 
         # ===== 数据预处理配置 =====
