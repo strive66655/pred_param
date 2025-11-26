@@ -29,11 +29,11 @@ class ExperimentConfig:
 
         # ===== 数据配置 (当前任务) =====
         # (基于 mc.lis 文件的真实结构)
-        self.num_curves = 1 # .lis 文件每个index只有1条 I-V 曲线
+        self.num_curves = 10 # .lis 文件每个index只有1条 I-V 曲线
         self.vg_points = 21  # 每条曲线有 21 个点 (0V 到 1.0V)
         self.num_lg = 1  # 这个 .lis 文件似乎是单个Lg的MC，而不是全局的
         # 总输入特征维度 = 1 * 21 * 1 = 21
-        self.input_dim = 231
+        self.input_dim = self.num_lg * self.num_curves * self.vg_points + self.vg_points
 
         # 我们只提取 .lis 文件中真实存在的参数
         self.output_params = ['VTH0', 'U0', 'AGS']  # 必须与 data_parser.py 的映射一致
@@ -50,7 +50,7 @@ class ExperimentConfig:
 
         # MLP配置
         self.mlp_layers = [1024, 512, 256, 128]  # 隐藏层 [cite: 201]
-        self.dropout_rate = 0.2
+        self.dropout_rate = 0
 
         # ===== 训练配置 =====
         self.batch_size = 64

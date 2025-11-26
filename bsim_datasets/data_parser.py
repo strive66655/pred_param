@@ -44,8 +44,6 @@ def parse_value(value_str: str) -> float:
             return 0.0
 
 
-# data_parser.py (只替换这个类)
-
 class HspiceLisParser:
     """
     (已更新) 解析 mc.lis 文件的主类

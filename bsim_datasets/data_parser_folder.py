@@ -64,7 +64,7 @@ def process_folder_merged(lis_folder_path: Path, output_dir: Path, recursive=Tru
             feature_list.append(features)
         else:
             if features.shape[1] > 1:
-                feature_list.append(features[:, 21:])
+                feature_list.append(features[:, config.vg_points:])
             else:
                 print(f"⚠️ 文件 {lis_file.name} 只有一列特征，跳过。")
                 continue
