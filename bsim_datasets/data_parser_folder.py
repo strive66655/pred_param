@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 import numpy as np
 from tqdm import tqdm
@@ -87,9 +88,32 @@ def process_folder_merged(lis_folder_path: Path, output_dir: Path, recursive=Tru
     print(f"  标签 (Y) 形状: {all_labels_np.shape}")
     print(f"  合并了 {len(feature_list)} 个文件，每个文件特征维度分别为 {[f.shape[1] for f in feature_list]}")
 
+def convert(features_path='data/processed/features.npy',
+            labels_path='data/processed/labels.npy',
+            out_path='data/processed/converted_dataset.npz'):
+    """
+    将 data_parser.py 输出的 features.npy 和 labels.npy
+    转换为 (ivcv, params) 格式以便神经网络训练。
+    """
+    features = np.load(features_path)
+    labels = np.load(labels_path)
+    print(f"加载完成: features {features.shape}, labels {labels.shape}")
+
+    # 检查特征数量一致
+    assert features.shape[0] == labels.shape[0], "样本数量不一致"
+
+    # 重命名为符合旧结构的字段
+    ivcv = features.astype(np.float32)
+    params = labels.astype(np.float32)
+
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    np.savez_compressed(out_path, ivcv=ivcv, params=params)
+    print(f"✅ 已保存到 {out_path}")
+
 
 if __name__ == "__main__":
     LIS_FOLDER_PATH = Path(r"F:\pred_param\bsim_datasets\-")  # 待解析的 .lis 文件夹
     NPY_OUTPUT_DIR = Path(r"F:\pred_param\data\processed")   # 输出保存目录
 
     process_folder_merged(LIS_FOLDER_PATH, NPY_OUTPUT_DIR, recursive=True)
+    convert()

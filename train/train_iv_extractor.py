@@ -1,15 +1,11 @@
 # train/train_iv_extractor.py
 import os
-import json
 import sys
-import time
 import torch
 import torch.nn as nn
 import numpy as np
 from matplotlib import pyplot as plt
 from torch.utils.data import DataLoader, random_split
-from tqdm import tqdm
-import seaborn as sns
 
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
@@ -114,6 +110,12 @@ def main():
     model = ParamExtractorIVNet(input_dim=config.input_dim, hidden_layers=config.mlp_layers,
                                 output_dim=config.output_dim, dropout=config.dropout_rate).to(DEVICE)
     opt = torch.optim.Adam(model.parameters(), lr=LR)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        opt,
+        mode='min',
+        factor=config.scheduler_factor,
+        patience=config.scheduler_patience,
+    )
     loss_fn = nn.MSELoss()
 
     best_loss = 1e9
@@ -125,7 +127,9 @@ def main():
         val_loss, preds, trues = eval_model(model, val_loader, loss_fn)
         train_losses.append(train_loss)
         val_losses.append(val_loss)
-        print(f"Epoch {epoch:03d} | Train Loss={train_loss:.6f} | Val Loss={val_loss:.6f}")
+        scheduler.step(val_loss)
+        current_lr = opt.param_groups[0]['lr']
+        print(f"Epoch {epoch:03d} | Train Loss={train_loss:.6f} | Val Loss={val_loss:.6f} | LR={current_lr:.2e}")
         if val_loss < best_loss:
             best_loss = val_loss
             patience = 0
