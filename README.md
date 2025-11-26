@@ -28,3 +28,11 @@
 ## 5. 结果可视化与部署
 - 可视化： 训练结束后，自动生成训练/验证 Loss 曲线图，以及预测值 vs 真实值的散点图，用于直观评估模型的拟合程度（理想情况散点应分布在对角线上）。
 - 元数据保存： 在保存模型权重的同时，会同步保存归一化所需的元数据（均值、方差、极值），确保在推理阶段能对新数据进行正确的预处理。
+
+## 6. 快速开始
+
+```shell
+cd pred_param 
+python bsim_datasets/data_parser_folder.py
+python train/train_iv_extractor.py
+```

@@ -6,6 +6,7 @@ import torch.nn as nn
 import numpy as np
 from matplotlib import pyplot as plt
 from torch.utils.data import DataLoader, random_split
+from tqdm import tqdm
 
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
@@ -21,10 +22,39 @@ PATIENCE = config.early_stopping_patience
 MODEL_SAVE = config.model_dir / "best_iv_extractor.pth"
 NORMALIZE_META = config.model_dir / "iv_norm_meta.json"
 
+
+def r2_score_np(y_true, y_pred):
+    """
+    计算 R^2 score for numpy arrays。
+    针对常数标签 (ss_tot=0) 增加了鲁棒性检查。
+    """
+    ss_res = np.sum((y_true - y_pred) ** 2)
+    ss_tot = np.sum((y_true - np.mean(y_true)) ** 2)
+
+    # 显式处理常数标签
+    if ss_tot < 1e-12:
+        if ss_res < 1e-12:
+            return 1.0  # 完美预测
+        else:
+            return 0.0  # 常数标签，但预测失败
+
+    return 1 - (ss_res / ss_tot)
+
+
+def mae_np(y_true, y_pred):
+    """计算 Mean Absolute Error (MAE) for numpy arrays (返回标量)."""
+    return np.mean(np.abs(y_true - y_pred))
+
+
+def rmse_np(y_true, y_pred):
+    """计算 Root Mean Square Error (RMSE) for numpy arrays (返回标量)."""
+    return np.sqrt(np.mean((y_true - y_pred) ** 2))
+
+
 def train_one_epoch(model, loader, opt, loss_fn):
     model.train()
     total = 0
-    for batch in loader:
+    for batch in tqdm(loader, desc="Training", leave=False):
         iv = batch["iv"].to(DEVICE)
         params = batch["params"].to(DEVICE)
         pred = model(iv)
@@ -35,12 +65,13 @@ def train_one_epoch(model, loader, opt, loss_fn):
         total += loss.item() * iv.size(0)
     return total / len(loader.dataset)
 
+
 def eval_model(model, loader, loss_fn):
     model.eval()
     total = 0
     preds, trues = [], []
     with torch.no_grad():
-        for batch in loader:
+        for batch in tqdm(loader, desc="Evaluation", leave=False):
             iv = batch["iv"].to(DEVICE)
             params = batch["params"].to(DEVICE)
             pred = model(iv)
@@ -53,7 +84,7 @@ def eval_model(model, loader, loss_fn):
     return total / len(loader.dataset), preds, trues
 
 
-def visualization(train_losses, val_losses, trues, preds):
+def visualization(train_losses, val_losses, trues, preds, r2_scores):
     param = config.output_params
 
     # --- 绘制损失曲线 ---
@@ -66,11 +97,12 @@ def visualization(train_losses, val_losses, trues, preds):
     plt.legend(fontsize=11)
     plt.grid(True, linestyle='--', alpha=0.5)
     plt.tight_layout()
-    plt.savefig(config.plot_dir / "loss_curve.png", dpi=300)
-    print("Saved training curve: loss_curve.png")
+    loss_path = config.plot_dir / "loss_curve.png"
+    plt.savefig(loss_path, dpi=300)
+    print(f"✓ 训练损失曲线图已保存: {loss_path.name}")
     plt.close()
 
-    # --- 绘制预测 vs 真值散点图 ---
+    # --- 绘制预测 vs 真值散点图 (使用反归一化数据) ---
     plt.figure(figsize=(12, 4))
     for i in range(len(param)):
         plt.subplot(1, len(param), i + 1)
@@ -81,18 +113,26 @@ def visualization(train_losses, val_losses, trues, preds):
         plt.plot([min_val, max_val], [min_val, max_val], 'r--', linewidth=2)
         plt.xlabel("True", fontsize=11)
         plt.ylabel("Pred", fontsize=11)
-        plt.title(f"{param[i]}", fontsize=12)
+
+        r2_text = f" (R²: {r2_scores[i]:.4f})"
+        plt.title(f"{param[i]}{r2_text}", fontsize=12)
+
         plt.grid(True, linestyle='--', alpha=0.3)
-        # 设置横轴不挤，自动调整
         plt.xticks(rotation=30)
         plt.tight_layout()
 
-    plt.savefig(config.plot_dir / "pred_vs_true.png", dpi=300)
-    print("Saved: pred_vs_true.png")
+    pred_path = config.plot_dir / "pred_vs_true.png"
+    plt.savefig(pred_path, dpi=300)
+    print(f"✓ 预测对比图已保存: {pred_path.name}")
     plt.close()
 
 
 def main():
+    # 打印设备和参数信息
+    print("Device:", DEVICE)
+    print("Model Parameters:", config.output_params)
+    print("-" * 50)
+
     data = np.load("data/processed/converted_dataset.npz")
     iv, params = data["ivcv"], data["params"]
 
@@ -101,7 +141,7 @@ def main():
     n = len(dataset)
     n_val = int(0.1 * n)
     n_train = n - n_val
-    train_set, val_set= random_split(dataset, [n_train, n_val])
+    train_set, val_set = random_split(dataset, [n_train, n_val])
     print(f"Dataset split: train={n_train}, val={n_val}")
 
     train_loader = DataLoader(train_set, batch_size=BATCH_SIZE, shuffle=True)
@@ -110,30 +150,43 @@ def main():
     model = ParamExtractorIVNet(input_dim=config.input_dim, hidden_layers=config.mlp_layers,
                                 output_dim=config.output_dim, dropout=config.dropout_rate).to(DEVICE)
     opt = torch.optim.Adam(model.parameters(), lr=LR)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        opt,
-        mode='min',
-        factor=config.scheduler_factor,
-        patience=config.scheduler_patience,
-    )
+
+    if hasattr(config, 'scheduler') and config.scheduler == 'plateau':
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            opt,
+            mode='min',
+            factor=config.scheduler_factor,
+            patience=config.scheduler_patience,
+        )
+    else:
+        scheduler = None
+
     loss_fn = nn.MSELoss()
 
     best_loss = 1e9
     patience = 0
     train_losses, val_losses = [], []
+    best_preds_norm = None
+    best_trues_norm = None
 
     for epoch in range(NUM_EPOCHS):
         train_loss = train_one_epoch(model, train_loader, opt, loss_fn)
-        val_loss, preds, trues = eval_model(model, val_loader, loss_fn)
+        val_loss, preds_norm, trues_norm = eval_model(model, val_loader, loss_fn)
         train_losses.append(train_loss)
         val_losses.append(val_loss)
-        scheduler.step(val_loss)
+
+        if scheduler:
+            scheduler.step(val_loss)
+
         current_lr = opt.param_groups[0]['lr']
         print(f"Epoch {epoch:03d} | Train Loss={train_loss:.6f} | Val Loss={val_loss:.6f} | LR={current_lr:.2e}")
+
         if val_loss < best_loss:
             best_loss = val_loss
             patience = 0
             torch.save({"model": model.state_dict(), "norm_meta": dataset.norm_meta}, MODEL_SAVE)
+            best_preds_norm = preds_norm
+            best_trues_norm = trues_norm
             print(f"保存最佳模型 (Val Loss: {val_loss:.6f})")
         else:
             patience += 1
@@ -142,6 +195,47 @@ def main():
                 break
     print("Training done, best val loss =", best_loss)
 
-    visualization(train_losses, val_losses, trues, preds)
+
+    if best_preds_norm is None:
+        print("警告: 未能找到最佳模型，使用最后一次 epoch 的结果进行报告。")
+        best_preds_norm = preds_norm
+        best_trues_norm = trues_norm
+
+    val_trues_final = dataset.inverse_transform_params(best_trues_norm)
+    val_preds_final = dataset.inverse_transform_params(best_preds_norm)
+
+    r2_scores = []
+
+    print("-" * 50)
+    print("最佳模型性能报告 (验证集)")
+    print("-" * 50)
+
+    param_names = config.output_params
+
+    for i, name in enumerate(param_names):
+        y_true = val_trues_final[:, i]
+        y_pred = val_preds_final[:, i]
+
+        r2 = r2_score_np(y_true, y_pred)
+        mae = mae_np(y_true, y_pred)
+        rmse = rmse_np(y_true, y_pred)
+
+        r2_scores.append(r2)
+
+        print(f"{name}:")
+        print(f"  R² Score: {r2:.4f}")
+        print(f"  MAE:      {mae:.4e}")
+        print(f"  RMSE:     {rmse:.4e}")
+        print("")
+
+    print("-" * 50)
+
+    visualization(train_losses, val_losses, val_trues_final, val_preds_final, r2_scores)
+
+    print("✅ 实验完成!")
+    print(f"  结果保存在: {config.output_dir.as_posix()}")
+    print("-" * 50)
+
+
 if __name__ == "__main__":
     main()

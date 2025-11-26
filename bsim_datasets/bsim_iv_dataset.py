@@ -81,6 +81,18 @@ class BSIMIVDataset(Dataset):
         # Z-score 公式: (X - mu) / sigma
         self.params = (self.params - p_mu) / p_sigma_safe
 
+    def inverse_transform_params(self, normalized_params):
+        """
+        逆向转换归一化后的参数 (Z-score 反归一化)。
+        Formula: X = Z * sigma + mu
+        """
+        normalized_params = np.asarray(normalized_params, dtype=np.float32)
+        p_mu = np.array(self.norm_meta["params_mu"], dtype=np.float32)
+        p_sigma = np.array(self.norm_meta["params_sigma"], dtype=np.float32)
+        denormalized_params = normalized_params * p_sigma + p_mu
+        return denormalized_params
+
+
     def _save_norm_meta(self, path):
         """保存归一化信息到 JSON 文件"""
         os.makedirs(os.path.dirname(path), exist_ok=True)
