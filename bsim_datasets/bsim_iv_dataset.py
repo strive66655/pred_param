@@ -17,13 +17,19 @@ class BSIMIVDataset(Dataset):
         if iv_data.ndim == 1:
             iv_data = iv_data[:, np.newaxis]
 
+        self.num_v_features = config.vg_points
         self.iv_data = iv_data.astype(np.float32)
+
+        self.V_raw = self.iv_data[:, :self.num_v_features]
+        self.I_raw = self.iv_data[:, self.num_v_features:]
+
         self.params = params.astype(np.float32)
         self.save_meta_path = save_meta_path
 
         if config.log_transform:
             self._apply_log_transform()
 
+        # self.iv_data = self._add_gradients(self.iv_data)
         # 生成或使用已有归一化元信息
         if norm_meta is None:
             self.norm_meta = self._compute_norm_meta()
@@ -32,47 +38,79 @@ class BSIMIVDataset(Dataset):
 
         self._apply_norm()
 
+        self.iv_data = np.hstack([self.V_norm, self.I_norm])
+
         # 保存归一化信息
         if self.save_meta_path:
             self._save_norm_meta(self.save_meta_path)
 
     def _apply_log_transform(self):
+        # 仅对电流数据应用 Log 变换
+        self.I_raw = np.clip(self.I_raw, a_min=config.clip_min_current, a_max=None)
+        self.I_raw = np.log10(self.I_raw)
+        print(f"已对电流特征应用 Log10 变换 (Shape: {self.I_raw.shape})")
 
-        split_idx = config.vg_points
-        if split_idx >= self.iv_data.shape[1]:
-            print("⚠️ 警告: vg_points 大于特征维度，未执行 Log 变换")
-            return
-            V_part = self.iv_data[:, :split_idx]
-            I_part = self.iv_data[:, split_idx:]
-            I_part = np.clip(I_part, a_min=config.clip_min_current, a_max=None)
-            I_part = np.log10(I_part)
-            self.iv_data = np.hstack([V_part, I_part])
-            print(f"✅ Applied Log10 transform. Cols {split_idx}:end (Currents) clipped to {config.clip_min_current} and logged.")
+    def _add_gradients(self, data):
+        """
+        计算 I-V 曲线的斜率 (Gradient)，并将其作为新特征拼接到原始数据后面。
+        这对提取 AGS (Subthreshold Slope) 至关重要。
+        """
+        N, D = data.shape
+        num_curves = config.num_curves
+        pts = config.vg_points
+
+        expected_dim = num_curves * pts * config.num_lg
+        if D != expected_dim:
+            print(f"警告: 数据维度 ({D}) 与 Config 预期 ({expected_dim}) 不符，跳过梯度特征生成。")
+            return data
+
+        reshaped = data.reshape(N, -1, pts)
+        gradients = np.gradient(reshaped, axis=2)
+
+        gradients_flat = gradients.reshape(N, -1)
+
+        gradients_flat = gradients_flat * 10.0
+
+        new_data = np.hstack([data, gradients_flat])
+        print(f"已添加梯度特征 (Shape: {data.shape} -> {new_data.shape})")
+        return new_data
+
     def _compute_norm_meta(self):
         """
         计算归一化元信息。
-        IV数据：保持逐特征（列）Min-Max 归一化。
-        参数：改为逐维度 Z-score 归一化。
+        V 数据：Z-score 归一化
+        I 数据：Z-score 归一化
+        参数：Z-score 归一化
         """
         return {
-            # IV 数据保持 Min-Max
-            "iv_min": self.iv_data.min(axis=0).tolist(),
-            "iv_max": self.iv_data.max(axis=0).tolist(),
+            # 🚨 修改：V 数据 (前 config.vg_points 列) Z-score
+            "V_mu": [float(self.V_raw[:, i].mean()) for i in range(self.V_raw.shape[1])],
+            "V_sigma": [float(self.V_raw[:, i].std()) for i in range(self.V_raw.shape[1])],
 
+            # 🚨 修改：I 数据 (其余列) Z-score
+            "I_mu": [float(self.I_raw[:, i].mean()) for i in range(self.I_raw.shape[1])],
+            "I_sigma": [float(self.I_raw[:, i].std()) for i in range(self.I_raw.shape[1])],
+
+            # 参数数据保持 Z-score
             "params_mu": [float(self.params[:, i].mean()) for i in range(self.params.shape[1])],
             "params_sigma": [float(self.params[:, i].std()) for i in range(self.params.shape[1])]
         }
 
     def _apply_norm(self):
 
-        iv_min = np.array(self.norm_meta["iv_min"], dtype=np.float32)
-        iv_max = np.array(self.norm_meta["iv_max"], dtype=np.float32)
+        # --- 1. V 数据归一化 (Z-score) ---
+        v_mu = np.array(self.norm_meta["V_mu"], dtype=np.float32)
+        v_sigma = np.array(self.norm_meta["V_sigma"], dtype=np.float32)
+        v_sigma_safe = np.where(v_sigma == 0, 1e-12, v_sigma)
 
-        denominator = iv_max - iv_min
-        # 避免除以 0，只在分母非零处归一化
-        denominator[denominator == 0] = 1e-12
+        self.V_norm = (self.V_raw - v_mu) / v_sigma_safe
 
-        self.iv_data = (self.iv_data - iv_min) / denominator
+        # --- 2. I 数据归一化 (Z-score) ---
+        i_mu = np.array(self.norm_meta["I_mu"], dtype=np.float32)
+        i_sigma = np.array(self.norm_meta["I_sigma"], dtype=np.float32)
+        i_sigma_safe = np.where(i_sigma == 0, 1e-12, i_sigma)
+
+        self.I_norm = (self.I_raw - i_mu) / i_sigma_safe
 
         p_mu = np.array(self.norm_meta["params_mu"], dtype=np.float32)
         p_sigma = np.array(self.norm_meta["params_sigma"], dtype=np.float32)

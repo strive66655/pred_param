@@ -31,12 +31,12 @@ class ExperimentConfig:
         self.num_curves = 10 # .lis 文件每个index只有1条 I-V 曲线
         self.vg_points = 21  # 每条曲线有 21 个点 (0V 到 1.0V)
         self.num_lg = 1  # 这个 .lis 文件似乎是单个Lg的MC，而不是全局的
+        self.num = 1
         # 总输入特征维度 = 1 * 21 * 1 = 21
-        self.input_dim = self.num_lg * self.num_curves * self.vg_points + self.vg_points
-
+        self.input_dim = self.vg_points + (self.num_curves * self.vg_points)
         # 我们只提取 .lis 文件中真实存在的参数
-        self.output_params = ['VTH0', 'U0', 'AGS']  # 必须与 data_parser.py 的映射一致
-        self.output_dim = len(self.output_params)  # output_dim 现在是 3
+        self.output_params = ['VTH0', 'U0', 'AGS', 'ETA0', 'LU0', 'VSAT']  # 必须与 data_parser.py 的映射一致
+        self.output_dim = len(self.output_params)
 
         # ===== 数据预处理配置 =====
         # 对电流使用log变换非常重要，尤其是亚阈值区域
@@ -48,14 +48,14 @@ class ExperimentConfig:
         self.model_type = "mlp"  # 先从MLP开始 [cite: 201]
 
         # MLP配置
-        self.mlp_layers = [1024, 512, 256, 128]  # 隐藏层 [cite: 201]
-        self.dropout_rate = 0
+        self.mlp_layers = [1024, 512, 256, 128, 64, 32]# 隐藏层 [cite: 201]
+        self.dropout_rate = 0.2
 
         # ===== 训练配置 =====
         self.batch_size = 64
         self.epochs = 200
         self.learning_rate = 1e-3
-        self.weight_decay = 1e-5  # L2正则化
+        self.weight_decay = 1e-4  # L2正则化
 
         # 损失函数: MSE (均方误差)
         self.loss_function = "mse"

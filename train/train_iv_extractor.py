@@ -22,6 +22,26 @@ PATIENCE = config.early_stopping_patience
 MODEL_SAVE = config.model_dir / "best_iv_extractor.pth"
 NORMALIZE_META = config.model_dir / "iv_norm_meta.json"
 
+# --- 新增: 定义损失权重 ---
+# 假设 output_params = ['VTH0', 'U0', 'AGS']
+# 我们给 AGS (索引2) 更大的权重，迫使模型关注它
+# LOSS_WEIGHTS = torch.tensor([1.0, 1.0, 1.0, 1.0, 1.0, 1.0]).to(DEVICE)
+
+
+def weighted_mse_loss(input, target, weights):
+    """
+    加权均方误差损失函数
+    :param input: 模型预测值 [batch, num_params]
+    :param target: 真实标签 [batch, num_params]
+    :param weights: 权重向量 [num_params]
+    """
+    # (input - target)^2
+    pct_var = (input - target) ** 2
+    # 乘以权重 (自动广播)
+    out = pct_var * weights.expand_as(target)
+    # 返回平均 Loss
+    return out.mean()
+
 
 def r2_score_np(y_true, y_pred):
     """
@@ -58,7 +78,10 @@ def train_one_epoch(model, loader, opt, loss_fn):
         iv = batch["iv"].to(DEVICE)
         params = batch["params"].to(DEVICE)
         pred = model(iv)
+
+        # 使用自定义加权 Loss
         loss = loss_fn(pred, params)
+
         opt.zero_grad()
         loss.backward()
         opt.step()
@@ -75,7 +98,10 @@ def eval_model(model, loader, loss_fn):
             iv = batch["iv"].to(DEVICE)
             params = batch["params"].to(DEVICE)
             pred = model(iv)
+
+            # 使用自定义加权 Loss
             loss = loss_fn(pred, params)
+
             total += loss.item() * iv.size(0)
             preds.append(pred.cpu().numpy())
             trues.append(params.cpu().numpy())
@@ -89,10 +115,10 @@ def visualization(train_losses, val_losses, trues, preds, r2_scores):
 
     # --- 绘制损失曲线 ---
     plt.figure(figsize=(8, 5))
-    plt.plot(train_losses, label="Train Loss", color='tab:blue', linewidth=2)
-    plt.plot(val_losses, label="Validation Loss", color='tab:orange', linewidth=2)
+    plt.plot(train_losses, label="Train Loss (Weighted)", color='tab:blue', linewidth=2)
+    plt.plot(val_losses, label="Validation Loss (Weighted)", color='tab:orange', linewidth=2)
     plt.xlabel("Epoch", fontsize=12)
-    plt.ylabel("MSE Loss", fontsize=12)
+    plt.ylabel("Weighted MSE Loss", fontsize=12)
     plt.title("Training & Validation Loss", fontsize=14)
     plt.legend(fontsize=11)
     plt.grid(True, linestyle='--', alpha=0.5)
@@ -102,10 +128,23 @@ def visualization(train_losses, val_losses, trues, preds, r2_scores):
     print(f"✓ 训练损失曲线图已保存: {loss_path.name}")
     plt.close()
 
-    # --- 绘制预测 vs 真值散点图 (使用反归一化数据) ---
-    plt.figure(figsize=(12, 4))
-    for i in range(len(param)):
-        plt.subplot(1, len(param), i + 1)
+    num_params = len(param)
+    # 使用 2 行 3 列的布局 (如果 num_params >= 4)
+    if num_params > 3:
+        rows = 2
+        cols = int(np.ceil(num_params / rows))
+        fig_width = 4 * cols
+        fig_height = 4 * rows
+    else:
+        rows = 1
+        cols = num_params
+        fig_width = 5 * cols
+        fig_height = 5
+
+    plt.figure(figsize=(fig_width, fig_height))
+
+    for i in range(num_params):
+        plt.subplot(rows, cols, i + 1)
         plt.scatter(trues[:, i], preds[:, i], s=30, alpha=0.7, color='tab:blue', edgecolors='k')
         # 对角线
         min_val = min(trues[:, i].min(), preds[:, i].min())
@@ -119,8 +158,8 @@ def visualization(train_losses, val_losses, trues, preds, r2_scores):
 
         plt.grid(True, linestyle='--', alpha=0.3)
         plt.xticks(rotation=30)
-        plt.tight_layout()
 
+    plt.tight_layout()
     pred_path = config.plot_dir / "pred_vs_true.png"
     plt.savefig(pred_path, dpi=300)
     print(f"✓ 预测对比图已保存: {pred_path.name}")
@@ -131,6 +170,7 @@ def main():
     # 打印设备和参数信息
     print("Device:", DEVICE)
     print("Model Parameters:", config.output_params)
+    # print("Loss Weights:", LOSS_WEIGHTS)  # 打印权重确认
     print("-" * 50)
 
     data = np.load("data/processed/converted_dataset.npz")
@@ -149,7 +189,7 @@ def main():
 
     model = ParamExtractorIVNet(input_dim=config.input_dim, hidden_layers=config.mlp_layers,
                                 output_dim=config.output_dim, dropout=config.dropout_rate).to(DEVICE)
-    opt = torch.optim.Adam(model.parameters(), lr=LR)
+    opt = torch.optim.Adam(model.parameters(), lr=LR, weight_decay=config.weight_decay)
 
     if hasattr(config, 'scheduler') and config.scheduler == 'plateau':
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
@@ -161,7 +201,8 @@ def main():
     else:
         scheduler = None
 
-    loss_fn = nn.MSELoss()
+    loss_fn = nn.MSELoss() # 不再使用标准 MSE
+    # print("Using Custom Weighted MSE Loss.")
 
     best_loss = 1e9
     patience = 0
@@ -170,8 +211,10 @@ def main():
     best_trues_norm = None
 
     for epoch in range(NUM_EPOCHS):
+        # 传入权重
         train_loss = train_one_epoch(model, train_loader, opt, loss_fn)
         val_loss, preds_norm, trues_norm = eval_model(model, val_loader, loss_fn)
+
         train_losses.append(train_loss)
         val_losses.append(val_loss)
 
@@ -194,7 +237,6 @@ def main():
                 print("Early stopping")
                 break
     print("Training done, best val loss =", best_loss)
-
 
     if best_preds_norm is None:
         print("警告: 未能找到最佳模型，使用最后一次 epoch 的结果进行报告。")
@@ -221,11 +263,13 @@ def main():
         rmse = rmse_np(y_true, y_pred)
 
         r2_scores.append(r2)
+        std_dev = np.std(y_true)
 
         print(f"{name}:")
         print(f"  R² Score: {r2:.4f}")
         print(f"  MAE:      {mae:.4e}")
         print(f"  RMSE:     {rmse:.4e}")
+        print(f"  True Std: {std_dev:.4e}")
         print("")
 
     print("-" * 50)

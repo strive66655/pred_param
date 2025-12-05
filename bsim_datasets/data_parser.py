@@ -52,9 +52,12 @@ class HspiceLisParser:
 
     def __init__(self, output_params_list):
         self.param_map = {
-            'vth0_value': 'VTH0',
-            'u0_param': 'U0',
-            'ags_param': 'AGS',
+            'vth0_value': 'VTH0',  # 匹配 'vth0_value='
+            'u0_value': 'U0',  # 匹配 'u0_value='
+            'ags_value': 'AGS',  # 匹配 'ags_value='
+            'eta0_value': 'ETA0',  # 匹配 'eta0_value='
+            'lu0_value': 'LU0',  # 匹配 'lu0_value='
+            'vsat_value': 'VSAT',  # 匹配 'vsat_value='
         }
 
         self.target_lis_params = list(self.param_map.keys())
@@ -69,8 +72,10 @@ class HspiceLisParser:
         # 2. 匹配 I-V 数据 (x 块) -- 修改后的表头
         self.re_iv_data = re.compile(
             r"x\s*\n"  # 匹配 x 行
-            r"\s*volt\s+param\s*\n"  # 表头第一行
-            r"\s*i_d_\d+(?:\.\d+)?\s*\n"    # 表头第二行
+            # 匹配第一行表头 (volt 和多个 current)
+            r"\s*volt\s+current\s*(?:\s+current\s*)*\n"
+            # 匹配第二行表头 (m1, m2, m3, ...)
+            r"\s*(?:\s+\w+)?\s*(?:\s+m\d+\s*)*\n"
             r"(.*?)"  # 捕获中间数据
             r"\s*y",  # y 行结尾
             re.DOTALL | re.IGNORECASE
@@ -87,7 +92,7 @@ class HspiceLisParser:
     def parse(self, lis_content: str):
         """
         解析 .lis 文件，提取 Monte Carlo 样本的 I-V 特征和参数标签。
-        支持任意数量的电流列 (i_d_*)。
+        支持单个 MC 块内包含多个 I-V 数据块。
         """
         features_list = []
         labels_list = []
@@ -101,51 +106,76 @@ class HspiceLisParser:
 
         for index, block_content in tqdm(mc_blocks, desc="解析 .lis 文件"):
 
-            # --- 提取 I-V 数据 ---
-            iv_match = self.re_iv_data.search(block_content)
-            if not iv_match:
-                print(f"⚠️ 警告: Index {index} 中未找到 I-V 数据块，跳过...")
+            # --- 提取 I-V 数据 (可能多个) ---
+            # 使用 findall 找到所有匹配的 I-V 数据块
+            iv_data_matches = self.re_iv_data.findall(block_content)
+
+            if not iv_data_matches:
+                print(f"⚠️ 警告: Index {index} 中未找到任何 I-V 数据块，跳过...")
                 continue
 
-            iv_data_str = iv_match.group(1).strip()
+            # 用于存储当前 MC 样本的所有特征
+            mc_voltages = []
+            mc_currents_list = []  # 存储所有曲线的电流值
 
-            voltages = []
-            currents_list = []  # 支持多条电流曲线
+            # 遍历所有的 I-V 数据块
+            for iv_data_str in iv_data_matches:
 
-            # --- 解析 I-V 数据行 ---
-            for line in iv_data_str.split('\n'):
-                parts = line.strip().split()
-                if len(parts) >= 2:
-                    try:
-                        voltages.append(parse_value(parts[0]))
-                        # 动态扩展电流曲线列表
-                        while len(currents_list) < len(parts) - 1:
-                            currents_list.append([])
-                        for i, val in enumerate(parts[1:]):
-                            currents_list[i].append(parse_value(val))
-                    except Exception as e:
-                        print(f"⚠️ Index {index} 解析行失败: {line} -> {e}")
+                iv_data_str = iv_data_str.strip()
+                voltages = []
+                currents_list_in_block = []  # 当前块中的电流曲线
 
-            if not voltages or not currents_list:
+                # --- 解析 I-V 数据行 ---
+                for line in iv_data_str.split('\n'):
+                    parts = line.strip().split()
+                    if len(parts) >= 2:
+                        try:
+                            # 假设第一列始终是电压
+                            voltages.append(parse_value(parts[0]))
+
+                            # 动态扩展电流曲线列表
+                            while len(currents_list_in_block) < len(parts) - 1:
+                                currents_list_in_block.append([])
+
+                            for i, val in enumerate(parts[1:]):
+                                currents_list_in_block[i].append(parse_value(val))
+                        except Exception as e:
+                            print(f"⚠️ Index {index} 解析行失败: {line} -> {e}")
+
+                # 将当前块的I-V数据加入到 MC 样本的总列表
+                # 注意：如果电压在每个块中都是相同的，可以选择只存储一次
+                # 为了特征向量统一，我们将所有电压和电流都平铺
+                mc_voltages.extend(voltages)
+                for curve in currents_list_in_block:
+                    mc_currents_list.append(curve)
+
+            if not mc_voltages or not mc_currents_list:
                 print(f"⚠️ Index {index} 未提取到有效 I-V 数据，跳过...")
                 continue
 
-            # --- 拼接特征向量 ---
-            combined_features = voltages.copy()
-            for curve in currents_list:
+            combined_features = mc_voltages[:config.vg_points]  # 仅取第一个曲线的电压作为共享特征
+            # 检查总电流点数是否符合预期
+            if len(mc_currents_list) != config.num_curves:
+                print(
+                    f"❌ Index {index} 提取的曲线数 ({len(mc_currents_list)}) 与 config.num_curves ({config.num_curves}) 不符，跳过...")
+                continue
+
+            for curve in mc_currents_list:
                 combined_features.extend(curve)
+
             features_list.append(combined_features)
 
-            # --- 提取参数数据 ---
+            # --- 提取参数数据 (只提取一次) ---
             label_dict_raw = {}
             for param_name, re_c in self.re_params:
                 param_match = re_c.search(block_content)
                 if param_match:
+                    # 注意：如果参数可能在多个地方重复，这里只会取第一次匹配到的
                     label_dict_raw[param_name] = parse_value(param_match.group(1))
 
             if not label_dict_raw:
-                print(f"⚠️ Index {index} 中未找到任何参数，跳过...")
-                features_list.pop()  # 移除特征以保持 X/Y 对齐
+                print(f"⚠️ Index {index} 中未找到任何参数，移除特征并跳过...")
+                features_list.pop()
                 continue
 
             # --- 按 output_order 排序标签 ---
@@ -159,9 +189,18 @@ class HspiceLisParser:
                             found = True
                             break
                 if not found:
+                    # 如果参数不在 lis 文件中，或者未在 param_map 中定义，填充 0.0
                     label_ordered.append(0.0)
 
             labels_list.append(label_ordered)
+
+            # --- 最终检查 ---
+            if len(combined_features) != config.input_dim:
+                print(
+                    f"❌ Index {index} 特征维度 ({len(combined_features)}) 与 config.input_dim ({config.input_dim}) 不匹配，移除特征和标签并跳过...")
+                if features_list: features_list.pop()
+                if labels_list: labels_list.pop()
+                continue
 
         if not features_list or not labels_list:
             print("❌ 错误: 解析完成，但未提取到任何有效数据。")
@@ -223,7 +262,7 @@ if __name__ == "__main__":
     # 2. 在下面设置路径
     # 3. 直接运行 `python data_parser.py`
 
-    L_FILE_PATH = Path("G:\DeepLearning\data_set\mc.lis")  # <--- 修改这里: 你的.lis文件路径
+    L_FILE_PATH = Path("bsim_datasets/mc1.lis")  # <--- 修改这里: 你的.lis文件路径
     NPY_OUTPUT_DIR = Path("data/processed")  # <--- 修改这里: .npy的保存路径
 
     main(L_FILE_PATH, NPY_OUTPUT_DIR)
