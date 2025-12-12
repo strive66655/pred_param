@@ -40,7 +40,6 @@ class BSIMIVDataset(Dataset):
         if norm_meta is None:
             self._fit_scalers()
             self.norm_meta = self._compute_norm_meta_from_scalers()
-
         else:
             self.norm_meta = norm_meta
             self._load_meta_to_scalers()
