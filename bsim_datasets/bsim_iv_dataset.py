@@ -7,8 +7,10 @@ import json
 import os
 
 sys.path.append(os.path.dirname(__file__))
+
 from config import config
 from sklearn.decomposition import PCA
+from sklearn.preprocessing import StandardScaler
 
 class BSIMIVDataset(Dataset):
     def __init__(self, iv_data, params, norm_meta=None, save_meta_path=None):
@@ -30,20 +32,25 @@ class BSIMIVDataset(Dataset):
         if config.log_transform:
             self._apply_log_transform()
 
-        # self.iv_data = self._add_gradients(self.iv_data)
+        self.V_scaler = StandardScaler()
+        self.I_scaler = StandardScaler()
+        self.params_scaler = StandardScaler()
+
         # 生成或使用已有归一化元信息
         if norm_meta is None:
-            self.norm_meta = self._compute_norm_meta()
+            self._fit_scalers()
+            self.norm_meta = self._compute_norm_meta_from_scalers()
+
         else:
             self.norm_meta = norm_meta
+            self._load_meta_to_scalers()
 
         self._apply_norm()
-        # self.iv_data = np.hstack([self.V_norm, self.I_norm, self.G_norm])
         self.iv_data = np.hstack([self.V_norm, self.I_norm])
 
         self._apply_pca()
         # 保存归一化信息
-        if self.save_meta_path:
+        if self.save_meta_path and norm_meta is None:  # 仅在训练集 (第一次) 运行时保存
             self._save_norm_meta(self.save_meta_path)
 
     def _apply_log_transform(self):
@@ -52,84 +59,58 @@ class BSIMIVDataset(Dataset):
         self.I_raw = np.log10(self.I_raw)
         print(f"已对电流特征应用 Log10 变换 (Shape: {self.I_raw.shape})")
 
-    def _add_gradients(self, data):
-        """
-        data: shape (N, 231) = [V(21), I(210)]
-        我们需要将 I 拆成 10 段，每段 21 点，对每段分别求 d(logI)/dV
-        """
 
-        V = data[:, :self.num_v_features]  # (N,21)
-        I = data[:, self.num_v_features:]  # (N,210)
+    def _fit_scalers(self):
+        """用原始数据拟合 StandardScaler"""
+        # Fit V data
+        self.V_scaler.fit(self.V_raw)
+        # Fit I data
+        self.I_scaler.fit(self.I_raw)
+        # Fit params data
+        self.params_scaler.fit(self.params)
 
-        num_curves = I.shape[1] // self.num_v_features  # 210 / 21 = 10
-        assert I.shape[1] % self.num_v_features == 0, "I 列数不是 V 点数的整数倍"
 
-        gradients = np.zeros_like(I, dtype=np.float32)  # (N,210)
-
-        # 对每条独立曲线求梯度
-        for c in range(num_curves):
-            start = c * self.num_v_features
-            end = (c + 1) * self.num_v_features
-
-            Ic = I[:, start:end]  # (N,21)
-
-            # 对每个样本分别求梯度
-            for i in range(I.shape[0]):
-                gradients[i, start:end] = np.gradient(Ic[i], V[i])
-
-        print(
-            f"添加梯度特征 (拆成 {num_curves} 条曲线): {data.shape} → {(data.shape[0], data.shape[1] + gradients.shape[1])}")
-        self.grad_raw = gradients
-        new_data = np.hstack([data, gradients])
-        return new_data
-
-    def _compute_norm_meta(self):
-        V = self.V_raw
-        I = self.I_raw
-        # G = self.grad_raw  # 新增
-
+    def _compute_norm_meta_from_scalers(self):
+        """从拟合好的 Scaler 实例中提取均值和方差"""
         return {
-            "V_mu": V.mean(axis=0).tolist(),
-            "V_sigma": V.std(axis=0).tolist(),
+            "V_mu": self.V_scaler.mean_.tolist(),
+            "V_scale": self.V_scaler.scale_.tolist(),
 
-            "I_mu": I.mean(axis=0).tolist(),
-            "I_sigma": I.std(axis=0).tolist(),
+            "I_mu": self.I_scaler.mean_.tolist(),
+            "I_scale": self.I_scaler.scale_.tolist(),
 
-            # "G_mu": G.mean(axis=0).tolist(),
-            # "G_sigma": G.std(axis=0).tolist(),
-
-            "params_mu": self.params.mean(axis=0).tolist(),
-            "params_sigma": self.params.std(axis=0).tolist(),
+            "params_mu": self.params_scaler.mean_.tolist(),
+            "params_scale": self.params_scaler.scale_.tolist(),
         }
 
+    def _load_meta_to_scalers(self):
+        """将 JSON 中的均值/方差加载回 Scaler 实例"""
+        # 加载 V Scaler 参数
+        self.V_scaler.mean_ = np.array(self.norm_meta["V_mu"], dtype=np.float32)
+        self.V_scaler.scale_ = np.array(self.norm_meta["V_scale"], dtype=np.float32)
+        self.V_scaler.n_features_in_ = len(self.V_scaler.mean_)
+
+        # 加载 I Scaler 参数
+        self.I_scaler.mean_ = np.array(self.norm_meta["I_mu"], dtype=np.float32)
+        self.I_scaler.scale_ = np.array(self.norm_meta["I_scale"], dtype=np.float32)
+        self.I_scaler.n_features_in_ = len(self.I_scaler.mean_)
+
+        # 加载 Params Scaler 参数
+        self.params_scaler.mean_ = np.array(self.norm_meta["params_mu"], dtype=np.float32)
+        self.params_scaler.scale_ = np.array(self.norm_meta["params_scale"], dtype=np.float32)
+        self.params_scaler.n_features_in_ = len(self.params_scaler.mean_)
+
     def _apply_norm(self):
+        """使用 Scaler 实例进行转换"""
 
-        # --- 1. V 数据归一化 (Z-score) ---
-        v_mu = np.array(self.norm_meta["V_mu"], dtype=np.float32)
-        v_sigma = np.array(self.norm_meta["V_sigma"], dtype=np.float32)
-        v_sigma_safe = np.where(v_sigma == 0, 1e-12, v_sigma)
+        # 1. V 数据归一化
+        self.V_norm = self.V_scaler.transform(self.V_raw)
 
-        self.V_norm = (self.V_raw - v_mu) / v_sigma_safe
+        # 2. I 数据归一化
+        self.I_norm = self.I_scaler.transform(self.I_raw)
 
-        # --- 2. I 数据归一化 (Z-score) ---
-        i_mu = np.array(self.norm_meta["I_mu"], dtype=np.float32)
-        i_sigma = np.array(self.norm_meta["I_sigma"], dtype=np.float32)
-        i_sigma_safe = np.where(i_sigma == 0, 1e-12, i_sigma)
-
-        self.I_norm = (self.I_raw - i_mu) / i_sigma_safe
-
-        # g_mu = np.array(self.norm_meta["G_mu"], dtype=np.float32)
-        # g_sigma = np.array(self.norm_meta["G_sigma"], dtype=np.float32)
-        # self.G_norm = (self.grad_raw - g_mu) / np.where(g_sigma == 0, 1e-12, g_sigma)
-
-        p_mu = np.array(self.norm_meta["params_mu"], dtype=np.float32)
-        p_sigma = np.array(self.norm_meta["params_sigma"], dtype=np.float32)
-        p_sigma_safe = np.where(p_sigma == 0, 1e-12, p_sigma)
-
-        # Z-score 公式: (X - mu) / sigma
-        self.params = (self.params - p_mu) / p_sigma_safe
-
-        # bsim_iv_dataset.py (仅修改 _apply_pca 部分)
+        # 3. 参数归一化
+        self.params = self.params_scaler.transform(self.params)
 
     def _apply_pca(self):
         """
@@ -184,15 +165,17 @@ class BSIMIVDataset(Dataset):
             self.iv_data = np.dot(iv_data_centered, pca_components.T)
 
             print(f"✅ PCA 应用完成：特征已降维至 {self.iv_data.shape[1]} 维。")
+
+
     def inverse_transform_params(self, normalized_params):
         """
-        逆向转换归一化后的参数 (Z-score 反归一化)。
-        Formula: X = Z * sigma + mu
+        逆向转换归一化后的参数 (使用 StandardScaler 的 inverse_transform)。
         """
         normalized_params = np.asarray(normalized_params, dtype=np.float32)
-        p_mu = np.array(self.norm_meta["params_mu"], dtype=np.float32)
-        p_sigma = np.array(self.norm_meta["params_sigma"], dtype=np.float32)
-        denormalized_params = normalized_params * p_sigma + p_mu
+
+        # 使用 StandardScaler 实例进行反向转换
+        # 注意: 传入的数据必须是 shape (N, D)
+        denormalized_params = self.params_scaler.inverse_transform(normalized_params)
         return denormalized_params
 
 
