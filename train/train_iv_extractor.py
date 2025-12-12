@@ -22,10 +22,7 @@ PATIENCE = config.early_stopping_patience
 MODEL_SAVE = config.model_dir / "best_iv_extractor.pth"
 NORMALIZE_META = config.model_dir / "iv_norm_meta.json"
 
-# --- 新增: 定义损失权重 ---
-# 假设 output_params = ['VTH0', 'U0', 'AGS']
-# 我们给 AGS (索引2) 更大的权重，迫使模型关注它
-# LOSS_WEIGHTS = torch.tensor([1.0, 1.0, 1.0, 1.0, 1.0, 1.0]).to(DEVICE)
+LOSS_WEIGHTS = torch.tensor([1.0, 1.0, 1.0, 2.0, 1.0, 1.0]).to(DEVICE)
 
 
 def weighted_mse_loss(input, target, weights):
@@ -178,6 +175,15 @@ def main():
 
     dataset = BSIMIVDataset(iv, params, save_meta_path=NORMALIZE_META)
 
+    if 'pca_n_components' in dataset.norm_meta:
+        # 使用 PCA 后的维度
+        INPUT_DIM = dataset.norm_meta['pca_n_components']
+    else:
+        # 如果没有 PCA meta (例如：在 config.py 中没有开启 PCA 或者数据集未加载 PCA)
+        # 使用原始维度
+        INPUT_DIM = dataset[0]["iv"].numel()
+    print(f"模型输入维度设置为: {INPUT_DIM}")
+
     n = len(dataset)
     n_val = int(0.1 * n)
     n_train = n - n_val
@@ -187,7 +193,7 @@ def main():
     train_loader = DataLoader(train_set, batch_size=BATCH_SIZE, shuffle=True)
     val_loader = DataLoader(val_set, batch_size=BATCH_SIZE, shuffle=False)
 
-    model = ParamExtractorIVNet(input_dim=config.input_dim, hidden_layers=config.mlp_layers,
+    model = ParamExtractorIVNet(input_dim=INPUT_DIM, hidden_layers=config.mlp_layers,
                                 output_dim=config.output_dim, dropout=config.dropout_rate).to(DEVICE)
     opt = torch.optim.Adam(model.parameters(), lr=LR, weight_decay=config.weight_decay)
 
@@ -203,6 +209,7 @@ def main():
 
     loss_fn = nn.MSELoss() # 不再使用标准 MSE
     # print("Using Custom Weighted MSE Loss.")
+    # loss_fn = lambda pred, params: weighted_mse_loss(pred, params, LOSS_WEIGHTS)
 
     best_loss = 1e9
     patience = 0

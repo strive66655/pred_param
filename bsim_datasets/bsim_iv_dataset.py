@@ -8,6 +8,7 @@ import os
 
 sys.path.append(os.path.dirname(__file__))
 from config import config
+from sklearn.decomposition import PCA
 
 class BSIMIVDataset(Dataset):
     def __init__(self, iv_data, params, norm_meta=None, save_meta_path=None):
@@ -37,9 +38,10 @@ class BSIMIVDataset(Dataset):
             self.norm_meta = norm_meta
 
         self._apply_norm()
-
+        # self.iv_data = np.hstack([self.V_norm, self.I_norm, self.G_norm])
         self.iv_data = np.hstack([self.V_norm, self.I_norm])
 
+        self._apply_pca()
         # 保存归一化信息
         if self.save_meta_path:
             self._save_norm_meta(self.save_meta_path)
@@ -52,48 +54,52 @@ class BSIMIVDataset(Dataset):
 
     def _add_gradients(self, data):
         """
-        计算 I-V 曲线的斜率 (Gradient)，并将其作为新特征拼接到原始数据后面。
-        这对提取 AGS (Subthreshold Slope) 至关重要。
+        data: shape (N, 231) = [V(21), I(210)]
+        我们需要将 I 拆成 10 段，每段 21 点，对每段分别求 d(logI)/dV
         """
-        N, D = data.shape
-        num_curves = config.num_curves
-        pts = config.vg_points
 
-        expected_dim = num_curves * pts * config.num_lg
-        if D != expected_dim:
-            print(f"警告: 数据维度 ({D}) 与 Config 预期 ({expected_dim}) 不符，跳过梯度特征生成。")
-            return data
+        V = data[:, :self.num_v_features]  # (N,21)
+        I = data[:, self.num_v_features:]  # (N,210)
 
-        reshaped = data.reshape(N, -1, pts)
-        gradients = np.gradient(reshaped, axis=2)
+        num_curves = I.shape[1] // self.num_v_features  # 210 / 21 = 10
+        assert I.shape[1] % self.num_v_features == 0, "I 列数不是 V 点数的整数倍"
 
-        gradients_flat = gradients.reshape(N, -1)
+        gradients = np.zeros_like(I, dtype=np.float32)  # (N,210)
 
-        gradients_flat = gradients_flat * 10.0
+        # 对每条独立曲线求梯度
+        for c in range(num_curves):
+            start = c * self.num_v_features
+            end = (c + 1) * self.num_v_features
 
-        new_data = np.hstack([data, gradients_flat])
-        print(f"已添加梯度特征 (Shape: {data.shape} -> {new_data.shape})")
+            Ic = I[:, start:end]  # (N,21)
+
+            # 对每个样本分别求梯度
+            for i in range(I.shape[0]):
+                gradients[i, start:end] = np.gradient(Ic[i], V[i])
+
+        print(
+            f"添加梯度特征 (拆成 {num_curves} 条曲线): {data.shape} → {(data.shape[0], data.shape[1] + gradients.shape[1])}")
+        self.grad_raw = gradients
+        new_data = np.hstack([data, gradients])
         return new_data
 
     def _compute_norm_meta(self):
-        """
-        计算归一化元信息。
-        V 数据：Z-score 归一化
-        I 数据：Z-score 归一化
-        参数：Z-score 归一化
-        """
+        V = self.V_raw
+        I = self.I_raw
+        # G = self.grad_raw  # 新增
+
         return {
-            # 🚨 修改：V 数据 (前 config.vg_points 列) Z-score
-            "V_mu": [float(self.V_raw[:, i].mean()) for i in range(self.V_raw.shape[1])],
-            "V_sigma": [float(self.V_raw[:, i].std()) for i in range(self.V_raw.shape[1])],
+            "V_mu": V.mean(axis=0).tolist(),
+            "V_sigma": V.std(axis=0).tolist(),
 
-            # 🚨 修改：I 数据 (其余列) Z-score
-            "I_mu": [float(self.I_raw[:, i].mean()) for i in range(self.I_raw.shape[1])],
-            "I_sigma": [float(self.I_raw[:, i].std()) for i in range(self.I_raw.shape[1])],
+            "I_mu": I.mean(axis=0).tolist(),
+            "I_sigma": I.std(axis=0).tolist(),
 
-            # 参数数据保持 Z-score
-            "params_mu": [float(self.params[:, i].mean()) for i in range(self.params.shape[1])],
-            "params_sigma": [float(self.params[:, i].std()) for i in range(self.params.shape[1])]
+            # "G_mu": G.mean(axis=0).tolist(),
+            # "G_sigma": G.std(axis=0).tolist(),
+
+            "params_mu": self.params.mean(axis=0).tolist(),
+            "params_sigma": self.params.std(axis=0).tolist(),
         }
 
     def _apply_norm(self):
@@ -112,6 +118,10 @@ class BSIMIVDataset(Dataset):
 
         self.I_norm = (self.I_raw - i_mu) / i_sigma_safe
 
+        # g_mu = np.array(self.norm_meta["G_mu"], dtype=np.float32)
+        # g_sigma = np.array(self.norm_meta["G_sigma"], dtype=np.float32)
+        # self.G_norm = (self.grad_raw - g_mu) / np.where(g_sigma == 0, 1e-12, g_sigma)
+
         p_mu = np.array(self.norm_meta["params_mu"], dtype=np.float32)
         p_sigma = np.array(self.norm_meta["params_sigma"], dtype=np.float32)
         p_sigma_safe = np.where(p_sigma == 0, 1e-12, p_sigma)
@@ -119,6 +129,61 @@ class BSIMIVDataset(Dataset):
         # Z-score 公式: (X - mu) / sigma
         self.params = (self.params - p_mu) / p_sigma_safe
 
+        # bsim_iv_dataset.py (仅修改 _apply_pca 部分)
+
+    def _apply_pca(self):
+        """
+        根据 norm_meta 决定是拟合 PCA 还是应用已有的 PCA 转换。
+        """
+        # --- 从 config.py 读取目标维度 ---
+        # 如果 config 中没有定义 pca_output_dim，我们使用默认值
+        try:
+            TARGET_DIM = config.pca_output_dim
+        except AttributeError:
+            TARGET_DIM = 20  # 默认使用 20 维
+            print(f"⚠️ config.pca_output_dim 未定义，默认使用 {TARGET_DIM} 维进行降维。")
+
+        # 确保 TARGET_DIM 是整数
+        if not isinstance(TARGET_DIM, int):
+            TARGET_DIM = int(TARGET_DIM)
+
+        if "pca_components" not in self.norm_meta:
+            # --- 训练集: 拟合 PCA 转换器 ---
+
+            # 将 n_components 设置为固定的整数
+            pca = PCA(n_components=TARGET_DIM, svd_solver='full')
+
+            # fit_transform 会自动进行中心化
+            self.iv_data = pca.fit_transform(self.iv_data)
+
+            # 保存关键信息到 norm_meta
+            # 修正 TypeError: 确保将 numpy.int64 转换为标准 Python int
+            self.norm_meta["pca_n_components"] = int(pca.n_components_)
+            self.norm_meta["pca_components"] = pca.components_.tolist()
+            self.norm_meta["pca_mean"] = pca.mean_.tolist()
+
+            # 可以保存解释方差比，方便分析
+            self.norm_meta["pca_explained_variance_ratio"] = pca.explained_variance_ratio_.tolist()
+
+            # 计算总共保留的方差百分比
+            total_variance = np.sum(pca.explained_variance_ratio_)
+
+            print("=" * 60)
+            print(f"🔥 PCA 拟合完成：特征从 {config.input_dim} 维降至 {pca.n_components_} 维。")
+            print(f"   共保留 {total_variance * 100:.2f}% 的数据方差。")
+            print("=" * 60)
+
+        else:
+            # --- 验证/测试集: 应用已有的 PCA 转换 ---
+
+            pca_mean = np.array(self.norm_meta["pca_mean"], dtype=np.float32)
+            pca_components = np.array(self.norm_meta["pca_components"], dtype=np.float32)
+
+            # 手动应用 PCA: (数据中心化 - 投影)
+            iv_data_centered = self.iv_data - pca_mean
+            self.iv_data = np.dot(iv_data_centered, pca_components.T)
+
+            print(f"✅ PCA 应用完成：特征已降维至 {self.iv_data.shape[1]} 维。")
     def inverse_transform_params(self, normalized_params):
         """
         逆向转换归一化后的参数 (Z-score 反归一化)。

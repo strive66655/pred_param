@@ -262,7 +262,7 @@ if __name__ == "__main__":
     # 2. 在下面设置路径
     # 3. 直接运行 `python data_parser.py`
 
-    L_FILE_PATH = Path("bsim_datasets/mc1.lis")  # <--- 修改这里: 你的.lis文件路径
+    L_FILE_PATH = Path("bsim_datasets/mc.lis")  # <--- 修改这里: 你的.lis文件路径
     NPY_OUTPUT_DIR = Path("data/processed")  # <--- 修改这里: .npy的保存路径
 
     main(L_FILE_PATH, NPY_OUTPUT_DIR)
