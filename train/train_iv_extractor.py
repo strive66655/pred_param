@@ -193,9 +193,24 @@ def main():
     train_loader = DataLoader(train_set, batch_size=BATCH_SIZE, shuffle=True)
     val_loader = DataLoader(val_set, batch_size=BATCH_SIZE, shuffle=False)
 
-    model = ParamExtractorIVNet(input_dim=INPUT_DIM, hidden_layers=config.mlp_layers,
-                                output_dim=config.output_dim, dropout=config.dropout_rate).to(DEVICE)
-    opt = torch.optim.Adam(model.parameters(), lr=LR, weight_decay=config.weight_decay)
+    # model = ParamExtractorIVNet(input_dim=INPUT_DIM, hidden_layers=config.mlp_layers,
+    #                             output_dim=config.output_dim, dropout=config.dropout_rate).to(DEVICE)
+    # opt = torch.optim.Adam(model.parameters(), lr=LR, weight_decay=config.weight_decay)
+
+    from models.residual_param_extractor import ResidualMLPParamExtractor
+
+    model = ResidualMLPParamExtractor(
+        input_dim=config.pca_output_dim,
+        output_dim=config.output_dim,
+        hidden_dim=config.residual_hidden_dim,
+        num_blocks=config.residual_blocks,
+        dropout=config.dropout_rate
+    )
+    opt = torch.optim.AdamW(
+        model.parameters(),
+        lr=config.learning_rate,
+        weight_decay=1e-4  # 比你原来的 1e-5 稍微大一点
+    )
 
     if hasattr(config, 'scheduler') and config.scheduler == 'plateau':
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(

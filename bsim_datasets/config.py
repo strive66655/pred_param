@@ -46,12 +46,20 @@ class ExperimentConfig:
         # ===== 模型配置 (当前任务) =====
         self.model_type = "mlp"  # 先从MLP开始 [cite: 201]
 
-        # MLP配置
-        self.mlp_layers = [256, 128, 64]# 隐藏层 [cite: 201]
-        self.dropout_rate = 0.2
+        # # MLP配置
+        # self.mlp_layers = [256, 128, 64]# 隐藏层 [cite: 201]
+        # self.dropout_rate = 0.2
 
         self.pca_enabled = True  # 是否启用 PCA
         self.pca_output_dim = 30  # 指定 PCA 降维后的维度 (例如 10, 20, 50)
+
+        # ===== 模型配置 =====
+        # self.model_type = "residual_mlp"
+        #
+        # self.residual_hidden_dim = 128
+        # self.residual_blocks = 3
+        self.dropout_rate = 0.1
+        self.ags_index = 2
 
         # ===== 训练配置 =====
         self.batch_size = 64
