@@ -16,23 +16,19 @@ class BSIMIVDataset(Dataset):
     def __init__(self, iv_data, params, norm_meta=None, save_meta_path=None):
         assert iv_data.shape[0] == params.shape[0], "样本数量不一致"
 
+        expected_dim = config.num_curves * config.vg_points
+        assert iv_data.shape[1] == expected_dim, f"输入数据维度错误: 预期 {expected_dim}, 实际 {iv_data.shape[1]}"
         # 确保数据至少是二维的 (N_samples, N_features)
         if iv_data.ndim == 1:
             iv_data = iv_data[:, np.newaxis]
 
-        self.num_v_features = config.vg_points
         self.iv_data = iv_data.astype(np.float32)
-
-        self.V_raw = self.iv_data[:, :self.num_v_features]
-        self.I_raw = self.iv_data[:, self.num_v_features:]
-
         self.params = params.astype(np.float32)
         self.save_meta_path = save_meta_path
 
         if config.log_transform:
             self._apply_log_transform()
 
-        self.V_scaler = StandardScaler()
         self.I_scaler = StandardScaler()
         self.params_scaler = StandardScaler()
 
@@ -45,26 +41,23 @@ class BSIMIVDataset(Dataset):
             self._load_meta_to_scalers()
 
         self._apply_norm()
-        self.iv_data = np.hstack([self.V_norm, self.I_norm])
-
-        self._apply_pca()
+        if config.pca_enabled:  # 检查 config 是否启用了 PCA
+            self._apply_pca()
         # 保存归一化信息
         if self.save_meta_path and norm_meta is None:  # 仅在训练集 (第一次) 运行时保存
             self._save_norm_meta(self.save_meta_path)
 
     def _apply_log_transform(self):
         # 仅对电流数据应用 Log 变换
-        self.I_raw = np.clip(self.I_raw, a_min=config.clip_min_current, a_max=None)
-        self.I_raw = np.log10(self.I_raw)
-        print(f"已对电流特征应用 Log10 变换 (Shape: {self.I_raw.shape})")
+        self.iv_data = np.clip(self.iv_data, a_min=config.clip_min_current, a_max=None)
+        self.iv_data = np.log10(self.iv_data)
+        print(f"已对电流特征应用 Log10 变换 (Shape: {self.iv_data.shape})")
 
 
     def _fit_scalers(self):
         """用原始数据拟合 StandardScaler"""
-        # Fit V data
-        self.V_scaler.fit(self.V_raw)
         # Fit I data
-        self.I_scaler.fit(self.I_raw)
+        self.I_scaler.fit(self.iv_data)
         # Fit params data
         self.params_scaler.fit(self.params)
 
@@ -72,9 +65,6 @@ class BSIMIVDataset(Dataset):
     def _compute_norm_meta_from_scalers(self):
         """从拟合好的 Scaler 实例中提取均值和方差"""
         return {
-            "V_mu": self.V_scaler.mean_.tolist(),
-            "V_scale": self.V_scaler.scale_.tolist(),
-
             "I_mu": self.I_scaler.mean_.tolist(),
             "I_scale": self.I_scaler.scale_.tolist(),
 
@@ -84,31 +74,26 @@ class BSIMIVDataset(Dataset):
 
     def _load_meta_to_scalers(self):
         """将 JSON 中的均值/方差加载回 Scaler 实例"""
-        # 加载 V Scaler 参数
-        self.V_scaler.mean_ = np.array(self.norm_meta["V_mu"], dtype=np.float32)
-        self.V_scaler.scale_ = np.array(self.norm_meta["V_scale"], dtype=np.float32)
-        self.V_scaler.n_features_in_ = len(self.V_scaler.mean_)
 
         # 加载 I Scaler 参数
         self.I_scaler.mean_ = np.array(self.norm_meta["I_mu"], dtype=np.float32)
-        self.I_scaler.scale_ = np.array(self.norm_meta["I_scale"], dtype=np.float32)
+        # 避免除以 0 导致 nan 或 inf
+        self.I_scaler.scale_ = np.where(np.array(self.norm_meta["I_scale"], dtype=np.float32) == 0,
+                                        1e-12,
+                                        np.array(self.norm_meta["I_scale"], dtype=np.float32))
         self.I_scaler.n_features_in_ = len(self.I_scaler.mean_)
 
         # 加载 Params Scaler 参数
         self.params_scaler.mean_ = np.array(self.norm_meta["params_mu"], dtype=np.float32)
-        self.params_scaler.scale_ = np.array(self.norm_meta["params_scale"], dtype=np.float32)
+        self.params_scaler.scale_ = np.where(np.array(self.norm_meta["params_scale"], dtype=np.float32) == 0,
+                                            1e-12,
+                                            np.array(self.norm_meta["params_scale"], dtype=np.float32))
         self.params_scaler.n_features_in_ = len(self.params_scaler.mean_)
 
     def _apply_norm(self):
         """使用 Scaler 实例进行转换"""
 
-        # 1. V 数据归一化
-        self.V_norm = self.V_scaler.transform(self.V_raw)
-
-        # 2. I 数据归一化
-        self.I_norm = self.I_scaler.transform(self.I_raw)
-
-        # 3. 参数归一化
+        self.iv_data = self.I_scaler.transform(self.iv_data)
         self.params = self.params_scaler.transform(self.params)
 
     def _apply_pca(self):
@@ -171,9 +156,6 @@ class BSIMIVDataset(Dataset):
         逆向转换归一化后的参数 (使用 StandardScaler 的 inverse_transform)。
         """
         normalized_params = np.asarray(normalized_params, dtype=np.float32)
-
-        # 使用 StandardScaler 实例进行反向转换
-        # 注意: 传入的数据必须是 shape (N, D)
         denormalized_params = self.params_scaler.inverse_transform(normalized_params)
         return denormalized_params
 
@@ -189,7 +171,16 @@ class BSIMIVDataset(Dataset):
         return self.iv_data.shape[0]
 
     def __getitem__(self, idx):
+        C = config.cnn_input_channels  # 10
+        L = config.cnn_sequence_length  # 21
+
+        if config.pca_enabled:
+            # 如果应用了 PCA，则特征是降维后的 (TARGET_DIM,)，保持不变
+            feature_item = self.iv_data[idx]
+        else:
+            # 如果没有 PCA，则特征是 (210,)，重塑为 (10, 21) 给 CNN
+            feature_item = self.iv_data[idx].reshape(C, L)
         return {
-            "iv": torch.from_numpy(self.iv_data[idx]),
+            "iv": torch.from_numpy(feature_item),
             "params": torch.from_numpy(self.params[idx])
         }

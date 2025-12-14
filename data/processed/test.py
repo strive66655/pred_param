@@ -5,7 +5,7 @@ from pathlib import Path
 # --- 配置 (与 config.py 保持一致) ---
 NUM_CURVES = 10
 VG_POINTS = 21
-INPUT_DIM = VG_POINTS + (NUM_CURVES * VG_POINTS)  # 231
+INPUT_DIM = NUM_CURVES * VG_POINTS  # 231
 OUTPUT_PARAMS = ['VTH0', 'U0', 'AGS', 'ETA0', 'LU0', 'VSAT']
 N_SAMPLES_TO_SHOW = 5  # 显示前 5 个样本
 
@@ -33,8 +33,6 @@ def create_verification_csv():
 
     # 3. 构建列标题
     headers = []
-    # 电压列 (V_P1 to V_P21)
-    headers.extend([f"V_P{i + 1}" for i in range(VG_POINTS)])
 
     # 电流列 (I_C1_P1 to I_C10_P21)
     for c in range(NUM_CURVES):

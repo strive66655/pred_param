@@ -15,7 +15,7 @@ class ExperimentConfig:
     def __init__(self):
         # ===== 项目信息 =====
         self.project_name = "DL_Parameter_Extraction"
-        self.experiment_name = f"exp_MLP_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        self.experiment_name = f"exp_CNN_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
         # ===== 设备配置 =====
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -31,8 +31,7 @@ class ExperimentConfig:
         self.num_curves = 10 # .lis 文件每个index只有1条 I-V 曲线
         self.vg_points = 21  # 每条曲线有 21 个点 (0V 到 1.0V)
         self.num_lg = 1  # 这个 .lis 文件似乎是单个Lg的MC，而不是全局的
-        self.num = 1
-        self.input_dim = self.vg_points + (self.num_curves * self.vg_points * self.num)
+        self.input_dim = self.num_curves * self.vg_points
         # 我们只提取 .lis 文件中真实存在的参数
         self.output_params = ['VTH0', 'U0', 'AGS', 'ETA0', 'LU0', 'VSAT']  # 必须与 data_parser.py 的映射一致
         self.output_dim = len(self.output_params)
@@ -44,14 +43,18 @@ class ExperimentConfig:
         self.clip_min_current = 1e-12  # log变换前的最小电流值
 
         # ===== 模型配置 (当前任务) =====
-        self.model_type = "mlp"  # 先从MLP开始 [cite: 201]
+        self.model_type = "cnn"  # 先从MLP开始 [cite: 201]
 
-        # MLP配置
-        self.mlp_layers = [256, 128, 64]# 隐藏层 [cite: 201]
-        self.dropout_rate = 0.2
-
-        self.pca_enabled = True  # 是否启用 PCA
+        self.pca_enabled = False  # 是否启用 PCA
         self.pca_output_dim = 30  # 指定 PCA 降维后的维度 (例如 10, 20, 50)
+
+        # CNN配置
+        self.cnn_channels = [32, 64]
+        self.cnn_kernel_sizes = [3, 3, 3]
+        self.cnn_input_channels = 10
+        self.cnn_sequence_length = 21  # 保持不变
+        self.cnn_final_mlp_layers = [128, 64, 32]
+        self.dropout_rate = 0.2
 
         # ===== 训练配置 =====
         self.batch_size = 64

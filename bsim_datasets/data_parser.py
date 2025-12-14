@@ -1,4 +1,4 @@
-# data_parser.py
+# data_parser.py (完整优化版，适配 10 条电流曲线输入，修复 IndexError)
 """
 HSPICE .lis 文件解析器
 - 专为解析蒙特卡洛 (mc) .lis 文件而设计。
@@ -9,9 +9,12 @@ import numpy as np
 import re
 from pathlib import Path
 from tqdm import tqdm
+import os
+import sys
 
 # 导入全局配置
-from config import config
+sys.path.append(os.path.dirname(__file__))
+from config import config  # 确保 config.py 中 num_curves=10, vg_points=21, input_dim=210
 
 
 def parse_value(value_str: str) -> float:
@@ -47,17 +50,17 @@ def parse_value(value_str: str) -> float:
 class HspiceLisParser:
     """
     (已更新) 解析 mc.lis 文件的主类
-    - 支持 i_linear 和 i_sat 两列数据
+    - 支持多条 I-V 曲线数据
     """
 
     def __init__(self, output_params_list):
         self.param_map = {
-            'vth0_value': 'VTH0',  # 匹配 'vth0_value='
-            'u0_value': 'U0',  # 匹配 'u0_value='
-            'ags_value': 'AGS',  # 匹配 'ags_value='
-            'eta0_value': 'ETA0',  # 匹配 'eta0_value='
-            'lu0_value': 'LU0',  # 匹配 'lu0_value='
-            'vsat_value': 'VSAT',  # 匹配 'vsat_value='
+            'vth0_value': 'VTH0',
+            'u0_value': 'U0',
+            'ags_value': 'AGS',
+            'eta0_value': 'ETA0',
+            'lu0_value': 'LU0',
+            'vsat_value': 'VSAT',
         }
 
         self.target_lis_params = list(self.param_map.keys())
@@ -107,14 +110,12 @@ class HspiceLisParser:
         for index, block_content in tqdm(mc_blocks, desc="解析 .lis 文件"):
 
             # --- 提取 I-V 数据 (可能多个) ---
-            # 使用 findall 找到所有匹配的 I-V 数据块
             iv_data_matches = self.re_iv_data.findall(block_content)
 
             if not iv_data_matches:
                 print(f"⚠️ 警告: Index {index} 中未找到任何 I-V 数据块，跳过...")
                 continue
 
-            # 用于存储当前 MC 样本的所有特征
             mc_voltages = []
             mc_currents_list = []  # 存储所有曲线的电流值
 
@@ -143,8 +144,6 @@ class HspiceLisParser:
                             print(f"⚠️ Index {index} 解析行失败: {line} -> {e}")
 
                 # 将当前块的I-V数据加入到 MC 样本的总列表
-                # 注意：如果电压在每个块中都是相同的，可以选择只存储一次
-                # 为了特征向量统一，我们将所有电压和电流都平铺
                 mc_voltages.extend(voltages)
                 for curve in currents_list_in_block:
                     mc_currents_list.append(curve)
@@ -153,32 +152,53 @@ class HspiceLisParser:
                 print(f"⚠️ Index {index} 未提取到有效 I-V 数据，跳过...")
                 continue
 
-            combined_features = mc_voltages[:config.vg_points]  # 仅取第一个曲线的电压作为共享特征
-            # 检查总电流点数是否符合预期
+            # -----------------------------------------------------------------
+            # 1. 组合特征 (仅电流值)
+            # -----------------------------------------------------------------
+
+            # 检查总电流曲线数是否符合预期 (10 条)
             if len(mc_currents_list) != config.num_curves:
                 print(
                     f"❌ Index {index} 提取的曲线数 ({len(mc_currents_list)}) 与 config.num_curves ({config.num_curves}) 不符，跳过...")
                 continue
 
-            for curve in mc_currents_list:
+            combined_features = []
+            valid_curves = True
+
+            # 将 10 条电流曲线 (每条 21 个点) 依次平铺到特征向量中
+            for i, curve in enumerate(mc_currents_list):
+                # 检查曲线长度是否正确 (21 个点)
+                if len(curve) != config.vg_points:
+                    print(
+                        f"❌ Index {index} 曲线 {i + 1} 长度 ({len(curve)}) 与 config.vg_points ({config.vg_points}) 不符，跳过...")
+                    valid_curves = False
+                    break  # 曲线长度不匹配，跳出当前 MC 样本的曲线循环
                 combined_features.extend(curve)
 
-            features_list.append(combined_features)
+            if not valid_curves:
+                continue
 
-            # --- 提取参数数据 (只提取一次) ---
+            # --- 2. 检查特征维度 ---
+            if len(combined_features) != config.input_dim:
+                print(
+                    f"❌ Index {index} 特征维度 ({len(combined_features)}) 与 config.input_dim ({config.input_dim}) 不匹配，跳过...")
+                continue  # 维度不匹配，跳到下一个样本
+
+            # -----------------------------------------------------------------
+            # 3. 提取参数数据 (标签)
+            # -----------------------------------------------------------------
             label_dict_raw = {}
             for param_name, re_c in self.re_params:
                 param_match = re_c.search(block_content)
                 if param_match:
-                    # 注意：如果参数可能在多个地方重复，这里只会取第一次匹配到的
                     label_dict_raw[param_name] = parse_value(param_match.group(1))
 
+            # --- 4. 检查标签是否找到 ---
             if not label_dict_raw:
-                print(f"⚠️ Index {index} 中未找到任何参数，移除特征并跳过...")
-                features_list.pop()
-                continue
+                print(f"⚠️ Index {index} 中未找到任何参数，跳过...")
+                continue  # 标签缺失，跳到下一个样本
 
-            # --- 按 output_order 排序标签 ---
+            # --- 5. 按 output_order 排序标签 ---
             label_ordered = []
             for out_param in self.output_order:
                 found = False
@@ -189,18 +209,17 @@ class HspiceLisParser:
                             found = True
                             break
                 if not found:
-                    # 如果参数不在 lis 文件中，或者未在 param_map 中定义，填充 0.0
-                    label_ordered.append(0.0)
+                    label_ordered.append(0.0)  # 填充缺失参数
 
+            # -----------------------------------------------------------------
+            # 6. 只有所有检查通过后，才将特征和标签添加到最终列表
+            # -----------------------------------------------------------------
+            features_list.append(combined_features)
             labels_list.append(label_ordered)
 
-            # --- 最终检查 ---
-            if len(combined_features) != config.input_dim:
-                print(
-                    f"❌ Index {index} 特征维度 ({len(combined_features)}) 与 config.input_dim ({config.input_dim}) 不匹配，移除特征和标签并跳过...")
-                if features_list: features_list.pop()
-                if labels_list: labels_list.pop()
-                continue
+        # -----------------------------------------------------------------
+        # 循环结束
+        # -----------------------------------------------------------------
 
         if not features_list or not labels_list:
             print("❌ 错误: 解析完成，但未提取到任何有效数据。")
@@ -215,6 +234,7 @@ class HspiceLisParser:
         print(f"  标签 (Y) 形状: {labels_np.shape}")
 
         return features_np, labels_np
+
 
 def main(lis_file_path: Path, output_dir: Path):
     """
@@ -239,7 +259,6 @@ def main(lis_file_path: Path, output_dir: Path):
         return
 
     # 初始化解析器
-    # 我们从 config.py 传入期望的参数列表
     parser = HspiceLisParser(output_params_list=config.output_params)
     features, labels = parser.parse(content)
 
@@ -257,12 +276,7 @@ def main(lis_file_path: Path, output_dir: Path):
 
 
 if __name__ == "__main__":
-    # --- 如何运行 ---
-    # 1. 把你的 mc.lis 文件放到一个地方, 例如 'data/' 目录
-    # 2. 在下面设置路径
-    # 3. 直接运行 `python data_parser.py`
-
-    L_FILE_PATH = Path("bsim_datasets/mc.lis")  # <--- 修改这里: 你的.lis文件路径
-    NPY_OUTPUT_DIR = Path("data/processed")  # <--- 修改这里: .npy的保存路径
+    L_FILE_PATH = Path("bsim_datasets/mc1.lis")
+    NPY_OUTPUT_DIR = Path("data/processed")
 
     main(L_FILE_PATH, NPY_OUTPUT_DIR)
