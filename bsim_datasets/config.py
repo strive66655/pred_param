@@ -45,15 +45,12 @@ class ExperimentConfig:
         # ===== 模型配置 (当前任务) =====
         self.model_type = "cnn"  # 先从MLP开始 [cite: 201]
 
-        self.pca_enabled = False  # 是否启用 PCA
-        self.pca_output_dim = 30  # 指定 PCA 降维后的维度 (例如 10, 20, 50)
-
         # CNN配置
         self.cnn_channels = [32, 64]
-        self.cnn_kernel_sizes = [3, 3, 3]
+        self.cnn_kernel_sizes = [5, 5]
         self.cnn_input_channels = 10
         self.cnn_sequence_length = 21  # 保持不变
-        self.cnn_final_mlp_layers = [128, 64, 32]
+        self.cnn_final_mlp_layers = [256, 128, 64]
         self.dropout_rate = 0.2
 
         # ===== 训练配置 =====

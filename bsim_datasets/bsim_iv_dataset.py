@@ -41,8 +41,6 @@ class BSIMIVDataset(Dataset):
             self._load_meta_to_scalers()
 
         self._apply_norm()
-        if config.pca_enabled:  # 检查 config 是否启用了 PCA
-            self._apply_pca()
         # 保存归一化信息
         if self.save_meta_path and norm_meta is None:  # 仅在训练集 (第一次) 运行时保存
             self._save_norm_meta(self.save_meta_path)
@@ -96,60 +94,6 @@ class BSIMIVDataset(Dataset):
         self.iv_data = self.I_scaler.transform(self.iv_data)
         self.params = self.params_scaler.transform(self.params)
 
-    def _apply_pca(self):
-        """
-        根据 norm_meta 决定是拟合 PCA 还是应用已有的 PCA 转换。
-        """
-        # --- 从 config.py 读取目标维度 ---
-        # 如果 config 中没有定义 pca_output_dim，我们使用默认值
-        try:
-            TARGET_DIM = config.pca_output_dim
-        except AttributeError:
-            TARGET_DIM = 20  # 默认使用 20 维
-            print(f"⚠️ config.pca_output_dim 未定义，默认使用 {TARGET_DIM} 维进行降维。")
-
-        # 确保 TARGET_DIM 是整数
-        if not isinstance(TARGET_DIM, int):
-            TARGET_DIM = int(TARGET_DIM)
-
-        if "pca_components" not in self.norm_meta:
-            # --- 训练集: 拟合 PCA 转换器 ---
-
-            # 将 n_components 设置为固定的整数
-            pca = PCA(n_components=TARGET_DIM, svd_solver='full')
-
-            # fit_transform 会自动进行中心化
-            self.iv_data = pca.fit_transform(self.iv_data)
-
-            # 保存关键信息到 norm_meta
-            # 修正 TypeError: 确保将 numpy.int64 转换为标准 Python int
-            self.norm_meta["pca_n_components"] = int(pca.n_components_)
-            self.norm_meta["pca_components"] = pca.components_.tolist()
-            self.norm_meta["pca_mean"] = pca.mean_.tolist()
-
-            # 可以保存解释方差比，方便分析
-            self.norm_meta["pca_explained_variance_ratio"] = pca.explained_variance_ratio_.tolist()
-
-            # 计算总共保留的方差百分比
-            total_variance = np.sum(pca.explained_variance_ratio_)
-
-            print("=" * 60)
-            print(f"🔥 PCA 拟合完成：特征从 {config.input_dim} 维降至 {pca.n_components_} 维。")
-            print(f"   共保留 {total_variance * 100:.2f}% 的数据方差。")
-            print("=" * 60)
-
-        else:
-            # --- 验证/测试集: 应用已有的 PCA 转换 ---
-
-            pca_mean = np.array(self.norm_meta["pca_mean"], dtype=np.float32)
-            pca_components = np.array(self.norm_meta["pca_components"], dtype=np.float32)
-
-            # 手动应用 PCA: (数据中心化 - 投影)
-            iv_data_centered = self.iv_data - pca_mean
-            self.iv_data = np.dot(iv_data_centered, pca_components.T)
-
-            print(f"✅ PCA 应用完成：特征已降维至 {self.iv_data.shape[1]} 维。")
-
 
     def inverse_transform_params(self, normalized_params):
         """
@@ -173,13 +117,8 @@ class BSIMIVDataset(Dataset):
     def __getitem__(self, idx):
         C = config.cnn_input_channels  # 10
         L = config.cnn_sequence_length  # 21
+        feature_item = self.iv_data[idx].reshape(C, L)
 
-        if config.pca_enabled:
-            # 如果应用了 PCA，则特征是降维后的 (TARGET_DIM,)，保持不变
-            feature_item = self.iv_data[idx]
-        else:
-            # 如果没有 PCA，则特征是 (210,)，重塑为 (10, 21) 给 CNN
-            feature_item = self.iv_data[idx].reshape(C, L)
         return {
             "iv": torch.from_numpy(feature_item),
             "params": torch.from_numpy(self.params[idx])

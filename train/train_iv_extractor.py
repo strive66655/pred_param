@@ -12,8 +12,7 @@ sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
 from bsim_datasets.config import config
 from bsim_datasets.bsim_iv_dataset import BSIMIVDataset
-# from models.param_extractor_iv import ParamExtractorIVNet
-from models.param_extractor_iv import IV1DCNN_10x21
+from models.param_extractor_iv import ParamExtractorIVNet
 DEVICE = config.device
 LR = config.learning_rate
 BATCH_SIZE = config.batch_size
@@ -193,7 +192,7 @@ def main():
     train_loader = DataLoader(train_set, batch_size=BATCH_SIZE, shuffle=True)
     val_loader = DataLoader(val_set, batch_size=BATCH_SIZE, shuffle=False)
 
-    model = IV1DCNN_10x21(config.output_dim).to(DEVICE)
+    model = ParamExtractorIVNet(config).to(DEVICE)
     opt = torch.optim.Adam(model.parameters(), lr=LR, weight_decay=config.weight_decay)
 
     if hasattr(config, 'scheduler') and config.scheduler == 'plateau':
