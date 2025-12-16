@@ -200,7 +200,7 @@ def main():
     from models.residual_param_extractor import ResidualMLPParamExtractor
 
     model = ResidualMLPParamExtractor(
-        input_dim=config.pca_output_dim,
+        input_dim=INPUT_DIM,
         output_dim=config.output_dim,
         hidden_dim=config.residual_hidden_dim,
         num_blocks=config.residual_blocks,
@@ -209,7 +209,7 @@ def main():
     opt = torch.optim.AdamW(
         model.parameters(),
         lr=config.learning_rate,
-        weight_decay=1e-4  # 比你原来的 1e-5 稍微大一点
+        weight_decay=1e-5
     )
 
     if hasattr(config, 'scheduler') and config.scheduler == 'plateau':

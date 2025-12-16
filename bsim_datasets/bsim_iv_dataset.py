@@ -46,8 +46,8 @@ class BSIMIVDataset(Dataset):
 
         self._apply_norm()
         self.iv_data = np.hstack([self.V_norm, self.I_norm])
-
-        self._apply_pca()
+        if config.pca_enabled:
+            self._apply_pca()
         # 保存归一化信息
         if self.save_meta_path and norm_meta is None:  # 仅在训练集 (第一次) 运行时保存
             self._save_norm_meta(self.save_meta_path)

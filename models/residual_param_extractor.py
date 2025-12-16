@@ -8,20 +8,10 @@ class ResidualMLPParamExtractor(nn.Module):
     params = Linear(x) + ResidualMLP(x)
     """
 
-    def __init__(
-        self,
-        input_dim,      # PCA 输出维度，如 30
-        output_dim,     # 参数维度，如 6
-        hidden_dim=128,
-        num_blocks=3,
-        dropout=0.1
-    ):
+    def __init__(self, input_dim, output_dim, hidden_dim=128, num_blocks=3, dropout=0.1):
         super().__init__()
 
-        # ========== 线性主映射 ==========
         self.linear_head = nn.Linear(input_dim, output_dim)
-
-        # ========== Residual blocks ==========
         self.blocks = nn.ModuleList()
         for _ in range(num_blocks):
             self.blocks.append(
@@ -44,14 +34,10 @@ class ResidualMLPParamExtractor(nn.Module):
         """
         x: (B, PCA_dim)
         """
-        # 主线性分支
         base = self.linear_head(x)
-
-        # Residual 非线性修正
         h = x
         for block in self.blocks:
             h = h + block(h)
-
         delta = self.out_proj(h)
 
         return base + delta
