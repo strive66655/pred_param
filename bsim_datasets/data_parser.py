@@ -52,12 +52,15 @@ class HspiceLisParser:
 
     def __init__(self, output_params_list):
         self.param_map = {
-            'vth0_value': 'VTH0',  # 匹配 'vth0_value='
-            'u0_value': 'U0',  # 匹配 'u0_value='
-            'ags_value': 'AGS',  # 匹配 'ags_value='
-            'eta0_value': 'ETA0',  # 匹配 'eta0_value='
-            'lu0_value': 'LU0',  # 匹配 'lu0_value='
-            'vsat_value': 'VSAT',  # 匹配 'vsat_value='
+            'vth0_value': 'VTH0',
+            'u0_param': 'U0',
+            'ags_param': 'AGS',
+            'vsat_value': 'VSAT',
+            'ub_value': 'UB',
+            'voff_value': 'VOFF',
+            'nfactor_value': 'NFACTOR',
+            'a0_value': 'A0',
+            'ua_value': 'UA'
         }
 
         self.target_lis_params = list(self.param_map.keys())
@@ -73,9 +76,9 @@ class HspiceLisParser:
         self.re_iv_data = re.compile(
             r"x\s*\n"  # 匹配 x 行
             # 匹配第一行表头 (volt 和多个 current)
-            r"\s*volt\s+current\s*(?:\s+current\s*)*\n"
+            r"\s*volt\s+param\s*(?:\s+param\s*)*\n"
             # 匹配第二行表头 (m1, m2, m3, ...)
-            r"\s*(?:\s+\w+)?\s*(?:\s+m\d+\s*)*\n"
+            r"\s*(?:\s+\w+)?\s*(?:\s*i_d_\d+(?:\.\d+)?\s*)*\n"
             r"(.*?)"  # 捕获中间数据
             r"\s*y",  # y 行结尾
             re.DOTALL | re.IGNORECASE

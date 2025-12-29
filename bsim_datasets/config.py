@@ -34,7 +34,7 @@ class ExperimentConfig:
         self.num = 1
         self.input_dim = self.vg_points + (self.num_curves * self.vg_points * self.num)
         # 我们只提取 .lis 文件中真实存在的参数
-        self.output_params = ['VTH0', 'U0', 'AGS', 'ETA0', 'LU0', 'VSAT']  # 必须与 data_parser.py 的映射一致
+        self.output_params = ['VTH0', 'U0', 'AGS', 'VSAT', 'UB', 'VOFF', 'NFACTOR', 'A0', 'UA']  # 必须与 data_parser.py 的映射一致
         self.output_dim = len(self.output_params)
 
         # ===== 数据预处理配置 =====
@@ -46,16 +46,21 @@ class ExperimentConfig:
         # ===== 模型配置 (当前任务) =====
         self.model_type = "mlp"  # 先从MLP开始 [cite: 201]
 
-        # MLP配置
+        # # MLP配置
         self.mlp_layers = [256, 128, 64]# 隐藏层 [cite: 201]
-        self.dropout_rate = 0.2
+        # self.dropout_rate = 0.2
 
         self.pca_enabled = True  # 是否启用 PCA
-        self.pca_output_dim = 30  # 指定 PCA 降维后的维度 (例如 10, 20, 50)
+        self.pca_output_dim = 80 # 指定 PCA 降维后的维度 (例如 10, 20, 50)
+
+        self.residual_hidden_dim = 128
+        self.residual_blocks = 3
+        self.dropout_rate = 0.1
+
 
         # ===== 训练配置 =====
         self.batch_size = 64
-        self.epochs = 200
+        self.epochs = 300
         self.learning_rate = 1e-3
         self.weight_decay = 1e-5  # L2正则化
 
