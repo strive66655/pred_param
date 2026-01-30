@@ -22,7 +22,7 @@ PATIENCE = config.early_stopping_patience
 MODEL_SAVE = config.model_dir / "best_iv_extractor.pth"
 NORMALIZE_META = config.model_dir / "iv_norm_meta.json"
 
-LOSS_WEIGHTS = torch.tensor([1.0, 1.0, 1.0, 2.0, 1.0, 1.0]).to(DEVICE)
+LOSS_WEIGHTS = torch.tensor([1.0, 1.0, 1.0, 1.0, 1.0, 1.0]).to(DEVICE)
 
 
 def weighted_mse_loss(input, target, weights):
@@ -193,24 +193,24 @@ def main():
     train_loader = DataLoader(train_set, batch_size=BATCH_SIZE, shuffle=True)
     val_loader = DataLoader(val_set, batch_size=BATCH_SIZE, shuffle=False)
 
-    model = ParamExtractorIVNet(input_dim=INPUT_DIM, hidden_layers=config.mlp_layers,
-                                output_dim=config.output_dim, dropout=config.dropout_rate).to(DEVICE)
-    opt = torch.optim.Adam(model.parameters(), lr=LR, weight_decay=config.weight_decay)
+    # model = ParamExtractorIVNet(input_dim=INPUT_DIM, hidden_layers=config.mlp_layers,
+    #                             output_dim=config.output_dim, dropout=config.dropout_rate).to(DEVICE)
+    # opt = torch.optim.Adam(model.parameters(), lr=LR, weight_decay=config.weight_decay)
 
-    # from models.residual_param_extractor import ResidualMLPParamExtractor
-    #
-    # model = ResidualMLPParamExtractor(
-    #     input_dim=INPUT_DIM,
-    #     output_dim=config.output_dim,
-    #     hidden_dim=config.residual_hidden_dim,
-    #     num_blocks=config.residual_blocks,
-    #     dropout=config.dropout_rate
-    # )
-    # opt = torch.optim.AdamW(
-    #     model.parameters(),
-    #     lr=config.learning_rate,
-    #     weight_decay=1e-5
-    # )
+    from models.residual_param_extractor import ResidualMLPParamExtractor
+
+    model = ResidualMLPParamExtractor(
+        input_dim=INPUT_DIM,
+        output_dim=config.output_dim,
+        hidden_dim=config.residual_hidden_dim,
+        num_blocks=config.residual_blocks,
+        dropout=config.dropout_rate
+    )
+    opt = torch.optim.AdamW(
+        model.parameters(),
+        lr=config.learning_rate,
+        weight_decay=1e-5
+    )
 
     if hasattr(config, 'scheduler') and config.scheduler == 'plateau':
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(

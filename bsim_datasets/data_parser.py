@@ -1,10 +1,5 @@
 # data_parser.py
-"""
-HSPICE .lis 文件解析器 (修复版)
-- 1. 使用通用正则匹配 x...y 数据块。
-- 2. 自动拼接分段表格 (Split Tables)。
-- 3. 构造 [Vg, Vd, Id] 格式特征。
-"""
+import os
 import numpy as np
 import re
 from pathlib import Path
@@ -13,14 +8,25 @@ from config import config
 
 
 def parse_value(value_str: str) -> float:
-    value_str = value_str.strip()
+    """
+    支持 HSPICE 所有的工程单位后缀，包括 meg
+    """
+    value_str = value_str.strip().lower()
     suffixes = {
         'p': 1e-12, 'n': 1e-9, 'u': 1e-6, 'm': 1e-3,
         'k': 1e3, 'x': 1e6, 'meg': 1e6, 'g': 1e9, 't': 1e12,
         'a': 1e-18, 'f': 1e-15
     }
+
+    # 特殊处理 meg (3字符)
+    if value_str.endswith('meg'):
+        try:
+            return float(value_str[:-3]) * 1e6
+        except:
+            return 0.0
+
     try:
-        suffix = value_str[-1].lower()
+        suffix = value_str[-1]
         if suffix in suffixes:
             return float(value_str[:-1]) * suffixes[suffix]
         return float(value_str)
@@ -30,12 +36,14 @@ def parse_value(value_str: str) -> float:
 
 class HspiceLisParser:
     def __init__(self, output_params_list):
-        self.param_map = {
+        # 完整的参数映射池：HSPICE内部变量名 -> 你的模型标准名
+        # 以后想多提参数，只需在此池中添加一行映射，无需修改下方逻辑
+        self.full_param_pool = {
             'vth0_value': 'VTH0', 'u0_param': 'U0', 'ags_param': 'AGS',
             'vsat_value': 'VSAT', 'ub_value': 'UB', 'voff_value': 'VOFF',
-            'nfactor_value': 'NFACTOR', 'a0_value': 'A0', 'ua_value': 'UA'
+            'nfactor_value': 'NFACTOR', 'a0_value': 'A0', 'ua_value': 'UA',
+            'k1_value': 'K1', 'k2_value': 'K2', 'eta0_value': 'ETA0'
         }
-        self.target_lis_params = list(self.param_map.keys())
         self.output_order = output_params_list
 
         self.re_mc_block = re.compile(
@@ -43,22 +51,11 @@ class HspiceLisParser:
             re.DOTALL
         )
 
-        # [通用正则] 只要是 x 开头 y 结尾的块都抓出来，不管是分段的哪一部分
+        # 优化后的 XY 块匹配正则
         self.re_xy_block = re.compile(
-            r"x\s*\n"
-            r"\s*volt\s+param\s*(?:\s+param\s*)*\n"
-            # 匹配第二行表头 (m1, m2, m3, ...)
-            r"\s*(?:\s+\w+)?\s*(?:\s*i_d_\d+(?:\.\d+)?\s*)*\n"
-            r"(.*?)"  # 捕获中间数据
-            r"\s*y",  # y 行结尾
-            re.DOTALL | re.IGNORECASE
+            r"x\s*\n\s*volt\s+param[\s\S]*?\n([\s\S]*?)\s*y",
+            re.IGNORECASE
         )
-
-        self.re_params = []
-        for param_name in self.target_lis_params:
-            self.re_params.append(
-                (param_name, re.compile(r"{}=\s*([\d.+-]+[pnumkaxfg]?)".format(param_name), re.IGNORECASE))
-            )
 
     def parse(self, lis_content: str):
         features_list = []
@@ -70,103 +67,82 @@ class HspiceLisParser:
             print("❌ 错误: 未找到 Monte Carlo 块。")
             return None, None
 
-        print(f"🔍 找到 {len(mc_blocks)} 个样本。目标: {len(vd_biases)} 条曲线 (Vd={vd_biases})...")
+        print(f"🔍 找到 {len(mc_blocks)} 个样本。目标参数: {self.output_order}")
 
         for index, block_content in tqdm(mc_blocks, desc="解析 .lis"):
+            # --- 1. 查找并拼接分段表格 ---
+            xy_matches = self.re_xy_block.findall(block_content)
 
-            # --- 1. 查找并拼接所有分段表格 ---
-            xy_blocks = self.re_xy_block.findall(block_content)
-
+            # 使用字典存储电流曲线，方便按 Vd 顺序排列
+            # 即使 .lis 里分段顺序乱了也能自动对应
+            vd_id_map = {}
             full_voltages = []
-            full_currents_list = []
 
-            for xy_data in xy_blocks:
-                lines = xy_data.strip().split('\n')
-                data_start_idx = -1
-                for i, line in enumerate(lines):
-                    # 只有以数字/负号开头的行才是数据
-                    if re.match(r"^\s*[\d.-]", line.strip()):
-                        data_start_idx = i
-                        break
+            # 获取当前块内所有的 i_d_xx 表头
+            re_vd_header = re.compile(r"i_d_([\d.]+)", re.IGNORECASE)
 
-                if data_start_idx == -1: continue
+            for xy_text in xy_matches:
+                lines = xy_text.strip().split('\n')
+                if not lines: continue
 
-                segment_volts = []
-                segment_currs = []
+                # 从第一行提取当前段包含哪些 Vd
+                local_vds = [float(v) for v in re_vd_header.findall(lines[0])]
 
-                for line in lines[data_start_idx:]:
+                for line in lines[1:]:
                     parts = line.strip().split()
-                    if len(parts) >= 2:
-                        try:
-                            v = parse_value(parts[0])
-                            c_vals = [parse_value(x) for x in parts[1:]]
-                            segment_volts.append(v)
-                            segment_currs.append(c_vals)
-                        except:
-                            pass
+                    if len(parts) < 2: continue
+                    try:
+                        v = parse_value(parts[0])
+                        if v not in full_voltages:
+                            full_voltages.append(v)
 
-                if not segment_volts: continue
+                        for i, id_val_str in enumerate(parts[1:]):
+                            vd = local_vds[i]
+                            if vd not in vd_id_map: vd_id_map[vd] = []
+                            vd_id_map[vd].append(parse_value(id_val_str))
+                    except:
+                        continue
 
-                if not full_voltages:
-                    full_voltages = segment_volts
-
-                if segment_currs:
-                    cols = list(map(list, zip(*segment_currs)))
-                    full_currents_list.extend(cols)
-
-            if len(full_currents_list) != len(vd_biases):
-                continue
-
-            # --- 2. 构造 [Vg, Vd, Id] 特征 ---
+            # --- 2. 构造特征 [Vg_vec, Vd_vec, Id_vec] ---
+            # 这种向量化排列与 Dataset 类中的 Log 变换逻辑完美契合
             combined_features = []
             pts = config.vg_points
 
-            for i in range(len(full_currents_list)):
-                current_curve = full_currents_list[i]
-                vd_val = vd_biases[i]
+            success_construct = True
+            for vd_bias in vd_biases:
+                if vd_bias not in vd_id_map:
+                    success_construct = False
+                    break
 
-                if len(full_voltages) < pts: break
+                id_curve = vd_id_map[vd_bias]
+                if len(id_curve) < pts:
+                    success_construct = False
+                    break
 
-                vg_vec = full_voltages[:pts]
-                vd_vec = [vd_val] * pts  # Vd 显式特征
-                id_vec = current_curve[:pts]
+                combined_features.extend(full_voltages[:pts])  # Vg 段
+                combined_features.extend([vd_bias] * pts)  # Vd 段
+                combined_features.extend(id_curve[:pts])  # Id 段
 
-                combined_features.extend(vg_vec)
-                combined_features.extend(vd_vec)
-                combined_features.extend(id_vec)
-
-            if len(combined_features) != config.input_dim:
+            if not success_construct or len(combined_features) != config.input_dim:
                 continue
+
+            # --- 3. 动态参数提取 (解耦核心) ---
+            current_label_dict = {}
+            for lis_name, bsim_name in self.full_param_pool.items():
+                # 只搜索当前 MC 块
+                reg = re.compile(r"{}=\s*([\d.+-]+[pnumkaxfg]?)".format(lis_name), re.IGNORECASE)
+                match = reg.search(block_content)
+                if match:
+                    current_label_dict[bsim_name] = parse_value(match.group(1))
+
+            # 根据 config.output_params 的顺序构建向量
+            label_vector = []
+            for target_p in self.output_order:
+                val = current_label_dict.get(target_p, 0.0)  # 没找到则补0
+                label_vector.append(val)
 
             features_list.append(combined_features)
-
-            # --- 3. 提取参数 ---
-            label_dict_raw = {}
-            for param_name, re_c in self.re_params:
-                param_match = re_c.search(block_content)
-                if param_match:
-                    label_dict_raw[param_name] = parse_value(param_match.group(1))
-
-            if not label_dict_raw:
-                features_list.pop()
-                continue
-
-            label_ordered = []
-            for out_param in self.output_order:
-                found = False
-                for lis_name, bsim_name in self.param_map.items():
-                    if bsim_name == out_param:
-                        if lis_name in label_dict_raw:
-                            label_ordered.append(label_dict_raw[lis_name])
-                            found = True
-                            break
-                if not found: label_ordered.append(0.0)
-
-            labels_list.append(label_ordered)
-
-        if not features_list:
-            print("❌ 未提取到数据，请检查文件格式。")
-            return None, None
+            labels_list.append(label_vector)
 
         return np.array(features_list), np.array(labels_list)
 
@@ -187,8 +163,36 @@ def main(lis_file_path: Path, output_dir: Path):
         np.save(output_dir / 'labels.npy', labels)
         print(f"\n✓ 数据已保存: {output_dir}")
 
+def convert(features_path='data/processed/features.npy',
+            labels_path='data/processed/labels.npy',
+            out_path='data/processed/converted_dataset.npz'):
+    """
+    将 data_parser.py 输出的 features.npy 和 labels.npy
+    转换为 (ivcv, params) 格式以便神经网络训练。
+    """
+    features = np.load(features_path)
+    labels = np.load(labels_path)
+    print(f"加载完成: features {features.shape}, labels {labels.shape}")
+
+    # 检查特征数量一致
+    assert features.shape[0] == labels.shape[0], "样本数量不一致"
+
+    if features.ndim == 3:
+        features_transposed = np.transpose(features, (0, 2, 1))
+        ivcv = features_transposed.reshape(features_transposed.shape[0], -1).astype(np.float32)
+        print(f"✅ 特征已从 {features.shape} 转换为展平的 MLP 格式: {ivcv.shape}")
+    else:
+        ivcv = features.astype(np.float32)
+        print(f"⚠️ 特征已经是 2D 格式: {ivcv.shape}，跳过展平。")
+
+    params = labels.astype(np.float32)
+
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    np.savez_compressed(out_path, ivcv=ivcv, params=params)
+    print(f"✅ 已保存到 {out_path}")
 
 if __name__ == "__main__":
     L_FILE_PATH = Path("bsim_datasets/mc.lis")  # 确认路径
     NPY_OUTPUT_DIR = Path("data/processed")
     main(L_FILE_PATH, NPY_OUTPUT_DIR)
+    convert()

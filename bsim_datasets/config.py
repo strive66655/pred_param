@@ -26,6 +26,10 @@ class ExperimentConfig:
         self.log_dir = self.output_dir / "logs"
         self.plot_dir = self.output_dir / "plots"
 
+
+        self.INPUT_LIS = r"bsim_datasets/mc.lis"
+        self.OUTPUT_NPZ = r"data/processed/converted_dataset.npz"
+
         # ===== 数据配置 (当前任务) =====
         # (基于 mc.lis 文件的真实结构)
         self.num_curves = 10 # .lis 文件每个index只有1条 I-V 曲线
@@ -36,7 +40,7 @@ class ExperimentConfig:
 
         self.input_dim = self.num_curves * self.vg_points * 3
         # 我们只提取 .lis 文件中真实存在的参数
-        self.output_params = ['VTH0', 'U0', 'AGS', 'VSAT', 'UB', 'VOFF', 'NFACTOR', 'A0', 'UA']  # 必须与 data_parser.py 的映射一致
+        self.output_params = ['VTH0', 'U0']#, 'AGS', 'VSAT', 'UB', 'VOFF', 'NFACTOR', 'A0', 'UA']  # 必须与 data_parser.py 的映射一致
         self.output_dim = len(self.output_params)
 
         # ===== 数据预处理配置 =====
@@ -51,7 +55,7 @@ class ExperimentConfig:
         # # MLP配置
         self.mlp_layers = [1024, 512, 256, 128, 64]
 
-        self.pca_enabled = False # 是否启用 PCA
+        self.pca_enabled = True # 是否启用 PCA
         self.pca_output_dim = 120 # 指定 PCA 降维后的维度 (例如 10, 20, 50)
 
         self.residual_hidden_dim = 128
