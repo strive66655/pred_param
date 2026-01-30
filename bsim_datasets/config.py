@@ -40,7 +40,7 @@ class ExperimentConfig:
 
         self.input_dim = self.num_curves * self.vg_points * 3
         # 我们只提取 .lis 文件中真实存在的参数
-        self.output_params = ['VTH0', 'U0']#, 'AGS', 'VSAT', 'UB', 'VOFF', 'NFACTOR', 'A0', 'UA']  # 必须与 data_parser.py 的映射一致
+        self.output_params = ['VTH0', 'U0', 'AGS', 'VSAT', 'UB', 'VOFF', 'NFACTOR', 'A0', 'UA']  # 必须与 data_parser.py 的映射一致
         self.output_dim = len(self.output_params)
 
         # ===== 数据预处理配置 =====

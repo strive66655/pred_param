@@ -47,50 +47,42 @@ class BSIMIVDataset(Dataset):
 
     def _apply_log_transform(self):
         """
-        仅对电流通道 (Id) 应用 Log10 变换。
-        数据结构: [N, Flattened_Features] -> Reshape -> [N, Num_Curves, 3_Channels, Pts]
+        对电流应用 Log10，并增加安全检查。
         """
         N, D = self.iv_data.shape
         num_c = config.num_curves
         pts = config.vg_points
 
-        try:
-            # Reshape 恢复物理结构
-            # Channel 0: Vg, Channel 1: Vd, Channel 2: Id
-            data_reshaped = self.iv_data.reshape(N, num_c * 3 * pts)
+        # 1. 维度校验
+        expected_dim = num_c * 3 * pts
+        assert D == expected_dim, f"特征维度错误: 实际 {D} vs 预期 {expected_dim}"
 
-            # 由于我们的特征排列是 [Vg_vec, Vd_vec, Id_vec] for Curve 1...
-            # 这里直接用切片操作比较复杂，不如用 mask
+        mask_id = np.zeros(D, dtype=bool)
+        block_size = 3 * pts
 
-            # 更稳健的方法：构建一个 mask
-            # 每个 block 长度 = 3 * pts
-            # Id 位于 block 的最后 pts 个位置
+        # 2. 构建 Mask (假设向量化排列 [Vg_vec, Vd_vec, Id_vec])
+        for i in range(num_c):
+            start = i * block_size
+            # Id 在 block 的最后 1/3
+            mask_id[start + 2 * pts: start + 3 * pts] = True
 
-            mask_id = np.zeros(D, dtype=bool)
-            block_size = 3 * pts
+        # 3. 安全自检：检查我们选中的是不是真的"小电流"
+        # 随机抽样检查前 100 行
+        sample_check = self.iv_data[:100, mask_id]
+        # 如果大部分值 > 1.5 (电压通常是 0~5V，电流通常 < 0.1A)，说明切错了
+        if np.mean(sample_check) > 1.5:
+            print("❌ 严重警告: 检测到待 Log 的数据数值过大！")
+            print("   可能错误地切到了电压列 (Vg/Vd)。请检查 data_parser.py 的排列顺序。")
+            # 这种情况下最好抛出异常，防止训练出垃圾模型
+            # raise ValueError("Log变换目标数据异常")
 
-            for i in range(num_c):
-                start = i * block_size
-                # Vg: start ~ start+pts
-                # Vd: start+pts ~ start+2*pts
-                # Id: start+2*pts ~ start+3*pts
-                mask_id[start + 2 * pts: start + 3 * pts] = True
+        # 4. 执行变换
+        currents = self.iv_data[:, mask_id]
+        # 避免原地修改时的内存问题，先 clip 再 log
+        currents = np.clip(currents, a_min=config.clip_min_current, a_max=None)
+        self.iv_data[:, mask_id] = np.log10(currents)
 
-            # 提取电流
-            currents = self.iv_data[:, mask_id]
-
-            # Clip & Log
-            currents = np.clip(currents, a_min=config.clip_min_current, a_max=None)
-            currents_log = np.log10(currents)
-
-            # 放回原数组
-            self.iv_data[:, mask_id] = currents_log
-
-            print(f"已对电流特征 (Id) 应用 Log10 变换。")
-
-        except Exception as e:
-            print(f"❌ Log变换失败: {e}")
-            sys.exit(1)
+        print(f"✅ Log10 变换完成。处理了 {np.sum(mask_id)} 个电流特征点。")
 
     def _compute_norm_meta(self):
         """
