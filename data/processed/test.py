@@ -9,6 +9,6 @@ print("特征数据 (ivcv) 前 5 行:")
 print(df_features.head())
 
 # 查看标签 (params) 的前 5 行
-df_labels = pd.DataFrame(data['params'], columns=['VTH0', 'U0', 'AGS', 'VSAT', 'UB', 'VOFF', 'NFACTOR', 'A0', 'UA']) # 假设是这三个参数
+df_labels = pd.DataFrame(data['params'], columns=['VTH0', 'U0', 'VSAT', 'VOFF', 'NFACTOR', 'A0']) # 假设是这三个参数
 print("\n标签数据 (params) 前 5 行:")
 print(df_labels.head())

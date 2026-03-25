@@ -33,6 +33,6 @@
 
 ```shell
 cd pred_param 
-python bsim_datasets/data_parser_folder.py
+python bsim_datasets/data_parser.py
 python train/train_iv_extractor.py
 ```

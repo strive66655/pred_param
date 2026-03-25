@@ -38,9 +38,12 @@ class ExperimentConfig:
 
         self.vd_values = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
 
-        self.input_dim = self.num_curves * self.vg_points * 3
+        self.input_dim = self.num_curves * self.vg_points
         # 我们只提取 .lis 文件中真实存在的参数
-        self.output_params = ['VTH0', 'U0', 'AGS', 'VSAT', 'UB', 'VOFF', 'NFACTOR', 'A0', 'UA']  # 必须与 data_parser.py 的映射一致
+        self.output_params = ['VTH0', 'VOFF', 'NFACTOR', 'K1', 'K2', 'U0', 'UA', 'UB', 'UC', 'RDSW', 'AGS', 'A0', 'KETA']  # 必须与 data_parser.py 的映射一致
+        # self.output_params = ['VTH0', 'U0', 'AGS', 'VSAT', 'UB', 'VOFF', 'NFACTOR', 'A0', 'UA']
+        # self.output_params = ['VTH0', 'U0', 'VOFF', 'NFACTOR', 'A0']
+
         self.output_dim = len(self.output_params)
 
         # ===== 数据预处理配置 =====
@@ -56,7 +59,7 @@ class ExperimentConfig:
         self.mlp_layers = [1024, 512, 256, 128, 64]
 
         self.pca_enabled = True # 是否启用 PCA
-        self.pca_output_dim = 120 # 指定 PCA 降维后的维度 (例如 10, 20, 50)
+        self.pca_n_components = 30 # 指定 PCA 降维后的维度 (例如 10, 20, 50)
 
         self.residual_hidden_dim = 128
         self.residual_blocks = 3

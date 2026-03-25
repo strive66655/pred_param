@@ -39,6 +39,10 @@ class HspiceLisParser:
         # 完整的参数映射池：HSPICE内部变量名 -> 你的模型标准名
         # 以后想多提参数，只需在此池中添加一行映射，无需修改下方逻辑
         self.full_param_pool = {
+            'm_vth0': 'VTH0', 'm_voff': 'VOFF', 'm_nfactor': 'NFACTOR',
+            'm_k1': 'K1', 'm_k2': 'K2', 'm_u0': 'U0', 'm_ua': 'UA',
+            'm_ub': 'UB', 'm_uc': 'UC', 'm_rdsw': 'RDSW','m_ags': 'AGS',
+            'm_a0': 'A0', 'm_keta': 'KETA',
             'vth0_value': 'VTH0', 'u0_param': 'U0', 'ags_param': 'AGS',
             'vsat_value': 'VSAT', 'ub_value': 'UB', 'voff_value': 'VOFF',
             'nfactor_value': 'NFACTOR', 'a0_value': 'A0', 'ua_value': 'UA',
@@ -119,8 +123,8 @@ class HspiceLisParser:
                     success_construct = False
                     break
 
-                combined_features.extend(full_voltages[:pts])  # Vg 段
-                combined_features.extend([vd_bias] * pts)  # Vd 段
+                # combined_features.extend(full_voltages[:pts])  # Vg 段
+                # combined_features.extend([vd_bias] * pts)  # Vd 段
                 combined_features.extend(id_curve[:pts])  # Id 段
 
             if not success_construct or len(combined_features) != config.input_dim:
@@ -192,7 +196,7 @@ def convert(features_path='data/processed/features.npy',
     print(f"✅ 已保存到 {out_path}")
 
 if __name__ == "__main__":
-    L_FILE_PATH = Path("bsim_datasets/mc.lis")  # 确认路径
+    L_FILE_PATH = Path("bsim_datasets/old.lis")  # 确认路径
     NPY_OUTPUT_DIR = Path("data/processed")
     main(L_FILE_PATH, NPY_OUTPUT_DIR)
     convert()
