@@ -17,6 +17,3 @@ class ParamExtractorIVNet(nn.Module):
     def forward(self, x):
         x = x.view(x.size(0), -1)
         return self.output_act(self.net(x))
-
-model = ParamExtractorIVNet()
-print(model)

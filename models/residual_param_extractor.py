@@ -1,4 +1,4 @@
-import torch
+# models/residual_param_extractor.py
 import torch.nn as nn
 
 
