@@ -9,7 +9,6 @@ import torch
 from pathlib import Path
 from datetime import datetime
 
-
 class ExperimentConfig:
     """实验配置"""
 
@@ -27,34 +26,49 @@ class ExperimentConfig:
         self.log_dir = self.output_dir / "logs"
         self.plot_dir = self.output_dir / "plots"
 
+
+        self.INPUT_LIS = r"bsim_datasets/mc.lis"
+        self.OUTPUT_NPZ = r"data/processed/converted_dataset.npz"
+
         # ===== 数据配置 (当前任务) =====
         # (基于 mc.lis 文件的真实结构)
-        self.num_curves = 3  # .lis 文件每个index只有1条 I-V 曲线
-        self.vg_points = 21  # 每条曲线有 21 个点 (0V 到 1.0V)
-        self.num_lg = 1  # 这个 .lis 文件似乎是单个Lg的MC，而不是全局的
-        # 总输入特征维度 = 1 * 21 * 1 = 21
-        self.input_dim = self.num_curves * self.vg_points * self.num_lg
+        self.num_curves = 10 
+        self.vg_points = 37
+        self.num_lg = 1 
 
+        self.vd_values = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+
+        self.input_dim = self.num_curves * self.vg_points
         # 我们只提取 .lis 文件中真实存在的参数
-        self.output_params = ['VTH0', 'U0', 'VSAT']  # 必须与 data_parser.py 的映射一致
-        self.output_dim = len(self.output_params)  # output_dim 现在是 3
+        self.output_params = ['VTH0', 'VOFF', 'NFACTOR', 'K1', 'K2', 'U0', 'UA', 'UB', 'UC', 'RDSW', 'AGS', 'A0', 'KETA']  # 必须与 data_parser.py 的映射一致
+        # self.output_params = ['VTH0', 'U0', 'AGS', 'VSAT', 'UB', 'VOFF', 'NFACTOR', 'A0', 'UA']
+        # self.output_params = ['VTH0', 'U0', 'VOFF', 'NFACTOR', 'A0']
+
+        self.output_dim = len(self.output_params)
 
         # ===== 数据预处理配置 =====
         # 对电流使用log变换非常重要，尤其是亚阈值区域
-        self.normalization = "minmax"  # 'minmax' 或 'standard'
+        self.normalization = "standard"  # 'minmax' 或 'standard'
         self.log_transform = True  # 对特征(电流)进行log10变换
         self.clip_min_current = 1e-12  # log变换前的最小电流值
 
         # ===== 模型配置 (当前任务) =====
-        self.model_type = "mlp"  # 先从MLP开始 [cite: 201]
+        self.model_type = "residual_mlp"  # 先从MLP开始 [cite: 201]
 
-        # MLP配置
-        self.mlp_layers = [1024, 512, 256, 128]  # 隐藏层 [cite: 201]
-        self.dropout_rate = 0.2
+        # # MLP配置
+        self.mlp_layers = [1024, 512, 256, 128, 64]
+
+        self.pca_enabled = False # 是否启用 PCA
+        self.pca_n_components = 30 # 指定 PCA 降维后的维度 (例如 10, 20, 50)
+
+        self.residual_hidden_dim = 128
+        self.residual_blocks = 3
+        self.dropout_rate = 0.1
+
 
         # ===== 训练配置 =====
         self.batch_size = 64
-        self.epochs = 200
+        self.epochs = 300
         self.learning_rate = 1e-3
         self.weight_decay = 1e-5  # L2正则化
 
@@ -68,7 +82,7 @@ class ExperimentConfig:
 
         # 早停
         self.early_stopping = True
-        self.early_stopping_patience = 25
+        self.early_stopping_patience = 30
 
         # ===== 目录创建 =====
         self._create_dirs()

@@ -1,9 +1,9 @@
 # models/param_extractor_iv.py
-import torch
 import torch.nn as nn
 
+
 class ParamExtractorIVNet(nn.Module):
-    def __init__(self, input_dim=63, hidden_layers=[1024, 512, 256], output_dim=3, dropout=0.2):
+    def __init__(self, input_dim, hidden_layers, output_dim, dropout):
         super().__init__()
         layers = []
         prev_dim = input_dim
