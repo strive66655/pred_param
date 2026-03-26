@@ -33,7 +33,7 @@ class ExperimentConfig:
         # ===== 数据配置 (当前任务) =====
         # (基于 mc.lis 文件的真实结构)
         self.num_curves = 10 # .lis 文件每个index只有1条 I-V 曲线
-        self.vg_points = 21  # 每条曲线有 21 个点 (0V 到 1.0V)
+        self.vg_points = 51  # 每条曲线有 21 个点 (0V 到 1.0V)
         self.num_lg = 1  # 这个 .lis 文件似乎是单个Lg的MC，而不是全局的
 
         self.vd_values = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]

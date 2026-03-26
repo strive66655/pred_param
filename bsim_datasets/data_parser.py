@@ -4,7 +4,11 @@ import numpy as np
 import re
 from pathlib import Path
 from tqdm import tqdm
-from config import config
+
+if __package__ in (None, ""):
+    from config import config
+else:
+    from .config import config
 
 
 def parse_value(value_str: str) -> float:
@@ -22,7 +26,7 @@ def parse_value(value_str: str) -> float:
     if value_str.endswith('meg'):
         try:
             return float(value_str[:-3]) * 1e6
-        except:
+        except ValueError:
             return 0.0
 
     try:
@@ -30,7 +34,7 @@ def parse_value(value_str: str) -> float:
         if suffix in suffixes:
             return float(value_str[:-1]) * suffixes[suffix]
         return float(value_str)
-    except:
+    except ValueError:
         return 0.0
 
 
@@ -39,14 +43,10 @@ class HspiceLisParser:
         # 完整的参数映射池：HSPICE内部变量名 -> 你的模型标准名
         # 以后想多提参数，只需在此池中添加一行映射，无需修改下方逻辑
         self.full_param_pool = {
-            'm_vth0': 'VTH0', 'm_voff': 'VOFF', 'm_nfactor': 'NFACTOR',
-            'm_k1': 'K1', 'm_k2': 'K2', 'm_u0': 'U0', 'm_ua': 'UA',
-            'm_ub': 'UB', 'm_uc': 'UC', 'm_rdsw': 'RDSW','m_ags': 'AGS',
-            'm_a0': 'A0', 'm_keta': 'KETA',
-            'vth0_value': 'VTH0', 'u0_param': 'U0', 'ags_param': 'AGS',
-            'vsat_value': 'VSAT', 'ub_value': 'UB', 'voff_value': 'VOFF',
-            'nfactor_value': 'NFACTOR', 'a0_value': 'A0', 'ua_value': 'UA',
-            'k1_value': 'K1', 'k2_value': 'K2', 'eta0_value': 'ETA0'
+            'vth0_stamos_val': 'VTH0', 'voff_stamos_val': 'VOFF', 'nfactor_stamos_val': 'NFACTOR',
+            'k1_stamos_val': 'K1', 'k2_stamos_val': 'K2', 'u0_stamos_val': 'U0', 'ua_stamos_val': 'UA',
+            'ub_stamos_val': 'UB', 'uc_stamos_val': 'UC', 'rdsw_stamos_val': 'RDSW','ags_stamos_val': 'AGS',
+            'a0_stamos_val': 'A0', 'keta_stamos_val': 'KETA',
         }
         self.output_order = output_params_list
 
@@ -87,24 +87,29 @@ class HspiceLisParser:
 
             for xy_text in xy_matches:
                 lines = xy_text.strip().split('\n')
-                if not lines: continue
+                if not lines: 
+                    continue
 
                 # 从第一行提取当前段包含哪些 Vd
                 local_vds = [float(v) for v in re_vd_header.findall(lines[0])]
 
                 for line in lines[1:]:
                     parts = line.strip().split()
-                    if len(parts) < 2: continue
+                    if len(parts) < 2:
+                        continue
                     try:
                         v = parse_value(parts[0])
                         if v not in full_voltages:
                             full_voltages.append(v)
 
                         for i, id_val_str in enumerate(parts[1:]):
+                            if i >= len(local_vds):
+                                break
                             vd = local_vds[i]
-                            if vd not in vd_id_map: vd_id_map[vd] = []
+                            if vd not in vd_id_map:
+                                vd_id_map[vd] = []
                             vd_id_map[vd].append(parse_value(id_val_str))
-                    except:
+                    except (IndexError, ValueError):
                         continue
 
             # --- 2. 构造特征 [Vg_vec, Vd_vec, Id_vec] ---
@@ -156,7 +161,7 @@ def main(lis_file_path: Path, output_dir: Path):
     output_dir.mkdir(parents=True, exist_ok=True)
     try:
         content = lis_file_path.read_text(encoding='utf-8')
-    except:
+    except UnicodeDecodeError:
         content = lis_file_path.read_text(encoding='latin1')
 
     parser = HspiceLisParser(output_params_list=config.output_params)
@@ -196,7 +201,7 @@ def convert(features_path='data/processed/features.npy',
     print(f"✅ 已保存到 {out_path}")
 
 if __name__ == "__main__":
-    L_FILE_PATH = Path("bsim_datasets/old.lis")  # 确认路径
+    L_FILE_PATH = Path("bsim_datasets/mc.lis")  # 确认路径
     NPY_OUTPUT_DIR = Path("data/processed")
     main(L_FILE_PATH, NPY_OUTPUT_DIR)
     convert()
