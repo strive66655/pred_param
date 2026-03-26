@@ -5,7 +5,7 @@ import torch
 import torch.nn as nn
 import numpy as np
 from matplotlib import pyplot as plt
-from torch.utils.data import DataLoader, random_split
+from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
@@ -13,6 +13,7 @@ sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 from bsim_datasets.config import config
 from bsim_datasets.bsim_iv_dataset import BSIMIVDataset
 from models.param_extractor_iv import ParamExtractorIVNet
+from models.residual_param_extractor import ResidualMLPParamExtractor
 
 DEVICE = config.device
 LR = config.learning_rate
@@ -22,7 +23,7 @@ PATIENCE = config.early_stopping_patience
 MODEL_SAVE = config.model_dir / "best_iv_extractor.pth"
 NORMALIZE_META = config.model_dir / "iv_norm_meta.json"
 
-LOSS_WEIGHTS = torch.tensor([1.0, 1.0, 1.0, 1.0, 1.0, 1.0]).to(DEVICE)
+# LOSS_WEIGHTS = torch.tensor([1.0, 1.0, 1.0, 1.0, 1.0, 1.0]).to(DEVICE)
 
 
 def weighted_mse_loss(input, target, weights):
@@ -87,6 +88,9 @@ def train_one_epoch(model, loader, opt, loss_fn):
 
 
 def eval_model(model, loader, loss_fn):
+    if len(loader.dataset) == 0:
+        raise ValueError("Validation dataset is empty. Increase dataset size or adjust the split ratio.")
+
     model.eval()
     total = 0
     preds, trues = [], []
@@ -162,6 +166,25 @@ def visualization(train_losses, val_losses, trues, preds, r2_scores):
     print(f"✓ 预测对比图已保存: {pred_path.name}")
     plt.close()
 
+def build_model(input_dim):
+    if getattr(config, "model_type", "mlp") == "residual_mlp":
+        model = ResidualMLPParamExtractor(
+            input_dim=input_dim,
+            output_dim=config.output_dim,
+            hidden_dim=config.residual_hidden_dim,
+            num_blocks=config.residual_blocks,
+            dropout=config.dropout_rate,
+        )
+    else:
+        model = ParamExtractorIVNet(
+            input_dim=input_dim,
+            hidden_layers=config.mlp_layers,
+            output_dim=config.output_dim,
+            dropout=config.dropout_rate,
+        )
+
+    return model.to(DEVICE)
+
 
 def main():
     # 打印设备和参数信息
@@ -169,47 +192,48 @@ def main():
     print("Model Parameters:", config.output_params)
     # print("Loss Weights:", LOSS_WEIGHTS)  # 打印权重确认
     print("-" * 50)
-
-    data = np.load("data/processed/converted_dataset.npz")
+    
+    config.save() 
+    
+    data = np.load(config.OUTPUT_NPZ)
     iv, params = data["ivcv"], data["params"]
 
-    dataset = BSIMIVDataset(iv, params, save_meta_path=NORMALIZE_META)
+    n = len(iv)
+    if n < 2:
+        raise ValueError("Dataset must contain at least 2 samples for train/validation split.")
 
-    if 'pca_n_components' in dataset.norm_meta:
-        # 使用 PCA 后的维度
-        INPUT_DIM = dataset.norm_meta['pca_n_components']
-    else:
-        # 如果没有 PCA meta (例如：在 config.py 中没有开启 PCA 或者数据集未加载 PCA)
-        # 使用原始维度
-        INPUT_DIM = dataset[0]["iv"].numel()
-    print(f"模型输入维度设置为: {INPUT_DIM}")
-
-    n = len(dataset)
-    n_val = int(0.1 * n)
+    n_val = max(1, int(0.1 * n))
+    if n_val >= n:
+        n_val = 1
     n_train = n - n_val
-    train_set, val_set = random_split(dataset, [n_train, n_val])
+    rng = np.random.default_rng(seed=42)
+    indices = rng.permutation(n)
+    train_indices = indices[:n_train]
+    val_indices = indices[n_train:]
+
+    train_dataset = BSIMIVDataset(
+        iv[train_indices],
+        params[train_indices],
+        save_meta_path=NORMALIZE_META,
+    )
+    val_dataset = BSIMIVDataset(
+        iv[val_indices],
+        params[val_indices],
+        norm_meta=train_dataset.norm_meta,
+    )
+
+    input_dim = int(train_dataset.iv_data.shape[1])
+    print(f"模型输入维度设置为: {input_dim}")
     print(f"Dataset split: train={n_train}, val={n_val}")
 
-    train_loader = DataLoader(train_set, batch_size=BATCH_SIZE, shuffle=True)
-    val_loader = DataLoader(val_set, batch_size=BATCH_SIZE, shuffle=False)
+    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False)
 
-    # model = ParamExtractorIVNet(input_dim=INPUT_DIM, hidden_layers=config.mlp_layers,
-    #                             output_dim=config.output_dim, dropout=config.dropout_rate).to(DEVICE)
-    # opt = torch.optim.Adam(model.parameters(), lr=LR, weight_decay=config.weight_decay)
-
-    from models.residual_param_extractor import ResidualMLPParamExtractor
-
-    model = ResidualMLPParamExtractor(
-        input_dim=INPUT_DIM,
-        output_dim=config.output_dim,
-        hidden_dim=config.residual_hidden_dim,
-        num_blocks=config.residual_blocks,
-        dropout=config.dropout_rate
-    )
+    model = build_model(input_dim)
     opt = torch.optim.AdamW(
         model.parameters(),
-        lr=config.learning_rate,
-        weight_decay=1e-5
+        lr=LR,
+        weight_decay=config.weight_decay
     )
 
     if hasattr(config, 'scheduler') and config.scheduler == 'plateau':
@@ -249,13 +273,13 @@ def main():
         if val_loss < best_loss:
             best_loss = val_loss
             patience = 0
-            torch.save({"model": model.state_dict(), "norm_meta": dataset.norm_meta}, MODEL_SAVE)
+            torch.save({"model": model.state_dict(), "norm_meta": train_dataset.norm_meta}, MODEL_SAVE)
             best_preds_norm = preds_norm
             best_trues_norm = trues_norm
             print(f"保存最佳模型 (Val Loss: {val_loss:.6f})")
         else:
             patience += 1
-            if patience >= PATIENCE:
+            if config.early_stopping and patience >= PATIENCE:
                 print("Early stopping")
                 break
     print("Training done, best val loss =", best_loss)
@@ -265,8 +289,8 @@ def main():
         best_preds_norm = preds_norm
         best_trues_norm = trues_norm
 
-    val_trues_final = dataset.inverse_transform_params(best_trues_norm)
-    val_preds_final = dataset.inverse_transform_params(best_preds_norm)
+    val_trues_final = val_dataset.inverse_transform_params(best_trues_norm)
+    val_preds_final = val_dataset.inverse_transform_params(best_preds_norm)
 
     r2_scores = []
 

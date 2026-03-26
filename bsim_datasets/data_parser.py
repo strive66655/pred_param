@@ -11,6 +11,9 @@ else:
     from .config import config
 
 
+VALUE_PATTERN = r"([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?(?:meg|[fpnumkaxgt])?)"
+
+
 def parse_value(value_str: str) -> float:
     """
     支持 HSPICE 所有的工程单位后缀，包括 meg
@@ -139,7 +142,7 @@ class HspiceLisParser:
             current_label_dict = {}
             for lis_name, bsim_name in self.full_param_pool.items():
                 # 只搜索当前 MC 块
-                reg = re.compile(r"{}=\s*([\d.+-]+[pnumkaxfg]?)".format(lis_name), re.IGNORECASE)
+                reg = re.compile(rf"{re.escape(lis_name)}=\s*{VALUE_PATTERN}", re.IGNORECASE)
                 match = reg.search(block_content)
                 if match:
                     current_label_dict[bsim_name] = parse_value(match.group(1))

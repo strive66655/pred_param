@@ -1,38 +1,109 @@
 # BSIM Parameter Extractor (PyTorch)
-## 1. 项目核心目标
-本项目旨在利用深度学习（DL）技术，从大规模的 HSPICE 蒙特卡洛（Monte Carlo）仿真 I-V 曲线数据中，高效、准确地逆向提取 MOS 晶体管的 BSIM 模型参数。目标参数主要包括 **VTH0** (阈值电压)、**U0** (迁移率) 和 **AGS** (体电荷修正系数)。
-## 2. 数据工程与处理流水线
-数据处理是该项目中代码量最大且逻辑最复杂的部分，主要包含解析、清洗和转换三个阶段：
-- **原始数据解析** (HSPICE .lis 解析)： 利用正则表达式（Regex）开发了专门的解析器，用于处理 HSPICE 的 Monte Carlo (MC) 仿真输出文件（.lis）。
-    - 提取逻辑： 代码通过定位 `monte carlo index = ...` 块来分离不同的样本。
-    - 数值转换： 实现了一个转换函数，能够自动识别并转换电路仿真中常见的科学计数法后缀（如 m, u, n, p, k, meg 等）为标准浮点数。
-    - 特征与标签匹配： 从数据块中提取 I-V 曲线数据作为特征（Feature），同时提取该次仿真对应的模型参数（如 VTH0, U0, AGS）作为标签（Label）。
-- **批量合并策略**： 为了支持多文件处理，设计了文件夹遍历逻辑。在合并多个仿真文件时，采用了“横向拼接”策略。
-    - 去冗余： 在拼接后续文件时，代码会自动丢弃重复的电压列（通常是第一列），只保留电流数据，从而构建出 [电压, 电流1, 电流2...] 格式的宽输入特征向量。
-- **数据预处理与归一化**： 为了适应神经网络训练，对物理数据进行了严格的预处理：
-    - 对数变换： 考虑到亚阈值区电流的变化范围极大，对电流特征进行了 Log10 变换。为了数值稳定性，在变换前设置了最小电流截断阈值（1e-12）。
-    - 特征归一化： 输入数据（I-V 曲线）采用 Min-Max 归一化，将其缩放到 [0, 1] 区间。
-    - 标签标准化： 输出参数（BSIM 参数）采用 Z-score 标准化（减均值除以标准差），以消除不同参数量级差异对梯度下降的影响。
-## 3. 模型架构
-项目采用了一个全连接神经网络（Multi-Layer Perceptron, MLP）作为预测模型：
-- **网络结构**： 模型由输入层、多个隐藏层和输出层组成。根据配置，当前的隐藏层节点数为 [1024, 512, 256, 128]。
-- **激活与正则化**： 每个线性层后接 ReLU 激活函数，并包含 Dropout 层以防止过拟合。
-- **输出层**： 最后一层直接输出预测的参数值，输出维度对应待提取参数的数量（当前为 3：VTH0, U0, AGS）。
-## 4. 训练策略与优化
-训练脚本集成了现代深度学习的训练技巧，确保模型收敛和泛化能力：
-- **损失函数**： 使用均方误差 (MSE Loss) 来衡量预测参数与真实参数之间的差异。
-- **优化器**： 采用 Adam 优化器，初始学习率设为 1e-3。
-- **学习率调度**： 实现了 ReduceLROnPlateau 策略，当验证集 Loss 不再下降时自动降低学习率。
-- **早停机制**： 监控验证集 Loss，如果连续多个 Epoch（耐心值设为 25）没有提升，则提前终止训练并保存最佳模型。 
-- **数据集划分**： 将数据集按 9:1 的比例随机划分为训练集和验证集。
-## 5. 结果可视化与部署
-- 可视化： 训练结束后，自动生成训练/验证 Loss 曲线图，以及预测值 vs 真实值的散点图，用于直观评估模型的拟合程度（理想情况散点应分布在对角线上）。
-- 元数据保存： 在保存模型权重的同时，会同步保存归一化所需的元数据（均值、方差、极值），确保在推理阶段能对新数据进行正确的预处理。
 
-## 6. 快速开始
+## Overview
 
-```shell
-cd pred_param 
+This project trains a neural network to regress BSIM model parameters from HSPICE Monte Carlo I-V curves.
+
+Current target parameters:
+
+- `VTH0`
+- `VOFF`
+- `NFACTOR`
+- `K1`
+- `K2`
+- `U0`
+- `UA`
+- `UB`
+- `UC`
+- `RDSW`
+- `AGS`
+- `A0`
+- `KETA`
+
+## Data Pipeline
+
+The dataset is built from `bsim_datasets/mc.lis`.
+
+1. `bsim_datasets/data_parser.py`
+   Parses Monte Carlo blocks from the `.lis` file.
+2. Extracts 10 `Id-Vg` curves corresponding to:
+   `Vd = [0.1, 0.2, ..., 1.0]`
+3. Each curve contains 51 `Vg` points.
+4. The final raw input shape is:
+   `10 * 51 = 510`
+5. Parsed arrays are saved to:
+   `data/processed/features.npy`
+   `data/processed/labels.npy`
+6. The converter writes:
+   `data/processed/converted_dataset.npz`
+
+## Preprocessing
+
+Implemented in [bsim_iv_dataset.py](/f:/pred_param/bsim_datasets/bsim_iv_dataset.py).
+
+- Input current features are clipped with `clip_min_current` before `log10`.
+- Input features are Min-Max normalized.
+- Output parameters are normalized with Z-score.
+- If `pca_enabled=True`, PCA is fit on the training split only.
+- Validation data reuses the training normalization and PCA metadata.
+
+This avoids validation leakage and keeps train/validation features in the same space.
+
+## Model
+
+Configured in [config.py](/f:/pred_param/bsim_datasets/config.py).
+
+Two model paths are supported:
+
+- `mlp`: plain multi-layer perceptron
+- `residual_mlp`: linear head + residual MLP blocks
+
+Current default:
+
+- `model_type = "residual_mlp"`
+- `pca_enabled = False` by default in config
+- `pca_n_components = 30` when PCA is enabled
+
+Residual MLP is implemented in [residual_param_extractor.py](/f:/pred_param/models/residual_param_extractor.py).
+
+## Training Flow
+
+Training entry:
+
+- [train_iv_extractor.py](/f:/pred_param/train/train_iv_extractor.py)
+
+Current flow:
+
+1. Load `data/processed/converted_dataset.npz`
+2. Split raw samples into train/validation sets
+3. Build `BSIMIVDataset` for training
+4. Reuse training normalization/PCA metadata for validation
+5. Build model from `config.model_type`
+6. Train with `AdamW + MSELoss`
+7. Optionally reduce LR with `ReduceLROnPlateau`
+8. Optionally stop early with `early_stopping`
+9. Save:
+   `experiments/<exp_name>/config.json`
+   `experiments/<exp_name>/models/best_iv_extractor.pth`
+   `experiments/<exp_name>/models/iv_norm_meta.json`
+   `experiments/<exp_name>/plots/loss_curve.png`
+   `experiments/<exp_name>/plots/pred_vs_true.png`
+
+## Run
+
+Generate processed data:
+
+```bash
 python bsim_datasets/data_parser.py
+```
+
+Train:
+
+```bash
 python train/train_iv_extractor.py
 ```
+
+## Notes
+
+- `config.normalization` is currently informational only; the implemented behavior is fixed to Min-Max for inputs and Z-score for labels.
+- Experiment outputs are written under `experiments/`.

@@ -201,6 +201,15 @@ cython_debug/
 .cursorignore
 .cursorindexingignore
 
+# Project artifacts
+experiments/
+*.lis
+*.npy
+*.npz
+data/processed/*.npy
+data/processed/*.npz
+*.pth
+
 # Marimo
 marimo/_static/
 marimo/_lsp/

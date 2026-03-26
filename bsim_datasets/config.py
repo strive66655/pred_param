@@ -32,9 +32,9 @@ class ExperimentConfig:
 
         # ===== 数据配置 (当前任务) =====
         # (基于 mc.lis 文件的真实结构)
-        self.num_curves = 10 # .lis 文件每个index只有1条 I-V 曲线
-        self.vg_points = 51  # 每条曲线有 21 个点 (0V 到 1.0V)
-        self.num_lg = 1  # 这个 .lis 文件似乎是单个Lg的MC，而不是全局的
+        self.num_curves = 10 
+        self.vg_points = 37
+        self.num_lg = 1 
 
         self.vd_values = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
 
@@ -53,12 +53,12 @@ class ExperimentConfig:
         self.clip_min_current = 1e-12  # log变换前的最小电流值
 
         # ===== 模型配置 (当前任务) =====
-        self.model_type = "mlp"  # 先从MLP开始 [cite: 201]
+        self.model_type = "residual_mlp"  # 先从MLP开始 [cite: 201]
 
         # # MLP配置
         self.mlp_layers = [1024, 512, 256, 128, 64]
 
-        self.pca_enabled = True # 是否启用 PCA
+        self.pca_enabled = False # 是否启用 PCA
         self.pca_n_components = 30 # 指定 PCA 降维后的维度 (例如 10, 20, 50)
 
         self.residual_hidden_dim = 128
