@@ -5,7 +5,11 @@ import torch.nn as nn
 import numpy as np
 from matplotlib import pyplot as plt
 from torch.utils.data import DataLoader
-from tqdm import tqdm
+try:
+    from tqdm import tqdm
+except ImportError:
+    def tqdm(iterable, **kwargs):
+        return iterable
 
 sys.path.append(os.path.dirname(__file__))
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))

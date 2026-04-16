@@ -22,7 +22,7 @@ Current target parameters:
 
 ## Data Pipeline
 
-The dataset is built from `bsim_datasets/mc.lis`.
+The dataset is built from `bsim_datasets/mc001 (1).lis`.
 
 1. `bsim_datasets/data_parser.py`
    Parses Monte Carlo blocks from the `.lis` file.
@@ -42,10 +42,9 @@ The dataset is built from `bsim_datasets/mc.lis`.
 Implemented in [bsim_iv_dataset.py](/f:/pred_param/bsim_datasets/bsim_iv_dataset.py).
 
 - Input current features are clipped with `clip_min_current` before `log10`.
-- Input features are Min-Max normalized.
+- Input features are normalized with Z-score.
 - Output parameters are normalized with Z-score.
-- If `pca_enabled=True`, PCA is fit on the training split only.
-- Validation data reuses the training normalization and PCA metadata.
+- Validation data reuses the training normalization metadata.
 
 This avoids validation leakage and keeps train/validation features in the same space.
 
@@ -61,8 +60,6 @@ Two model paths are supported:
 Current default:
 
 - `model_type = "residual_mlp"`
-- `pca_enabled = False` by default in config
-- `pca_n_components = 30` when PCA is enabled
 
 Residual MLP is implemented in [residual_param_extractor.py](/f:/pred_param/models/residual_param_extractor.py).
 
@@ -77,7 +74,7 @@ Current flow:
 1. Load `data/processed/converted_dataset.npz`
 2. Split raw samples into train/validation sets
 3. Build `BSIMIVDataset` for training
-4. Reuse training normalization/PCA metadata for validation
+4. Reuse training normalization metadata for validation
 5. Build model from `config.model_type`
 6. Train with `AdamW + MSELoss`
 7. Optionally reduce LR with `ReduceLROnPlateau`
@@ -105,5 +102,5 @@ python train/train_iv_extractor.py
 
 ## Notes
 
-- `config.normalization` is currently informational only; the implemented behavior is fixed to Min-Max for inputs and Z-score for labels.
+- `config.normalization` is currently informational only; the implemented behavior is fixed to Z-score for both inputs and labels.
 - Experiment outputs are written under `experiments/`.

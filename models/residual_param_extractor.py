@@ -4,7 +4,7 @@ import torch.nn as nn
 
 class ResidualMLPParamExtractor(nn.Module):
     """
-    PCA + Residual MLP
+    Residual MLP
     params = Linear(x) + ResidualMLP(x)
     """
 
@@ -32,7 +32,7 @@ class ResidualMLPParamExtractor(nn.Module):
 
     def forward(self, x):
         """
-        x: (B, PCA_dim)
+        x: (B, input_dim)
         """
         base = self.linear_head(x)
         h = x

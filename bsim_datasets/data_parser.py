@@ -3,7 +3,11 @@ import os
 import numpy as np
 import re
 from pathlib import Path
-from tqdm import tqdm
+try:
+    from tqdm import tqdm
+except ImportError:
+    def tqdm(iterable, **kwargs):
+        return iterable
 
 if __package__ in (None, ""):
     from config import config
@@ -135,7 +139,8 @@ class HspiceLisParser:
                 # combined_features.extend([vd_bias] * pts)  # Vd 段
                 combined_features.extend(id_curve[:pts])  # Id 段
 
-            if not success_construct or len(combined_features) != config.input_dim:
+            expected_raw_dim = getattr(config, "raw_input_dim", config.num_curves * config.vg_points)
+            if not success_construct or len(combined_features) != expected_raw_dim:
                 continue
 
             # --- 3. 动态参数提取 (解耦核心) ---
@@ -204,7 +209,7 @@ def convert(features_path='data/processed/features.npy',
     print(f"✅ 已保存到 {out_path}")
 
 if __name__ == "__main__":
-    L_FILE_PATH = Path("bsim_datasets/mc.lis")  # 确认路径
+    L_FILE_PATH = Path(config.INPUT_LIS)
     NPY_OUTPUT_DIR = Path("data/processed")
     main(L_FILE_PATH, NPY_OUTPUT_DIR)
     convert()

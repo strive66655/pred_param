@@ -1,106 +1,121 @@
 # config.py
 """
-实验配置中心
-- 集中管理所有超参数和项目设置。
-- 当前任务: 仅I-V数据, 预测部分参数, 使用MLP模型。
+Experiment configuration.
 """
 
-import torch
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
+
+import torch
+
 
 class ExperimentConfig:
-    """实验配置"""
+    """Centralized experiment configuration."""
 
     def __init__(self):
-        # ===== 项目信息 =====
+        # Project info
         self.project_name = "DL_Parameter_Extraction"
         self.experiment_name = f"exp_MLP_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
-        # ===== 设备配置 =====
-        self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        # Device
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
 
-        # ===== 路径配置 =====
+        # Paths
         self.output_dir = Path("experiments") / self.experiment_name
         self.model_dir = self.output_dir / "models"
         self.log_dir = self.output_dir / "logs"
         self.plot_dir = self.output_dir / "plots"
 
-
-        self.INPUT_LIS = r"bsim_datasets/mc.lis"
+        self.INPUT_LIS = r"bsim_datasets/mc001 (1).lis"
         self.OUTPUT_NPZ = r"data/processed/converted_dataset.npz"
 
-        # ===== 数据配置 (当前任务) =====
-        # (基于 mc.lis 文件的真实结构)
-        self.num_curves = 10 
-        self.vg_points = 37
-        self.num_lg = 1 
-
+        # Data settings
+        self.num_curves = 10
+        self.vg_points = 51
+        self.num_lg = 1
         self.vd_values = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
 
-        self.input_dim = self.num_curves * self.vg_points
-        # 我们只提取 .lis 文件中真实存在的参数
-        self.output_params = ['VTH0', 'VOFF', 'NFACTOR', 'K1', 'K2', 'U0', 'UA', 'UB', 'UC', 'RDSW', 'AGS', 'A0', 'KETA']  # 必须与 data_parser.py 的映射一致
-        # self.output_params = ['VTH0', 'U0', 'AGS', 'VSAT', 'UB', 'VOFF', 'NFACTOR', 'A0', 'UA']
-        # self.output_params = ['VTH0', 'U0', 'VOFF', 'NFACTOR', 'A0']
+        self.include_raw_id = True
+        self.include_log_id = True
+        self.include_gm_id = True
+        self.include_log_gm = True
+        self.include_log_curvature = False
+        self.raw_input_dim = self.num_curves * self.vg_points
+        self.feature_channels = self._count_feature_channels()
+        self.input_dim = self.num_curves * self.feature_channels * self.vg_points
 
+        self.output_params = [
+            "VTH0",
+            "VOFF",
+            "NFACTOR",
+            "K1",
+            "K2",
+            "U0",
+            "UA",
+            "UB",
+            "UC",
+            "RDSW",
+            "AGS",
+            "A0",
+            "KETA",
+        ]
         self.output_dim = len(self.output_params)
 
-        # ===== 数据预处理配置 =====
-        # 对电流使用log变换非常重要，尤其是亚阈值区域
-        self.normalization = "standard"  # 'minmax' 或 'standard'
-        self.log_transform = True  # 对特征(电流)进行log10变换
-        self.clip_min_current = 1e-12  # log变换前的最小电流值
+        # Preprocessing
+        self.normalization = "standard"  # Informational only in the current pipeline.
+        self.log_transform = True
+        self.clip_min_current = 1e-13
 
-        # ===== 模型配置 (当前任务) =====
-        self.model_type = "residual_mlp"  # 先从MLP开始 [cite: 201]
-
-        # # MLP配置
-        self.mlp_layers = [1024, 512, 256, 128, 64]
-
-        self.pca_enabled = False # 是否启用 PCA
-        self.pca_n_components = 30 # 指定 PCA 降维后的维度 (例如 10, 20, 50)
-
+        # Model
+        self.model_type = "residual_mlp"
+        self.mlp_layers = [8000, 8000, 8000]
         self.residual_hidden_dim = 128
         self.residual_blocks = 3
         self.dropout_rate = 0.1
 
-
-        # ===== 训练配置 =====
+        # Training
         self.batch_size = 64
-        self.epochs = 300
+        self.epochs = 3000
         self.learning_rate = 1e-3
-        self.weight_decay = 1e-5  # L2正则化
-
-        # 损失函数: MSE (均方误差)
+        self.weight_decay = 1e-5
         self.loss_function = "mse"
-
-        # 学习率调度
-        self.scheduler = "plateau"  # 'plateau', 'cosine', 'step', None
+        self.scheduler = "plateau"
         self.scheduler_patience = 10
         self.scheduler_factor = 0.5
-
-        # 早停
         self.early_stopping = True
         self.early_stopping_patience = 30
 
-        # ===== 目录创建 =====
-        self._create_dirs()
+    def _count_feature_channels(self):
+        return sum(
+            int(flag)
+            for flag in [
+                self.include_raw_id,
+                self.include_log_id,
+                self.include_gm_id,
+                self.include_log_gm,
+                self.include_log_curvature,
+            ]
+        )
 
     def _create_dirs(self):
-        """创建实验目录"""
+        """Create experiment directories."""
         for dir_path in [self.model_dir, self.log_dir, self.plot_dir]:
             dir_path.mkdir(parents=True, exist_ok=True)
 
     def save(self):
-        """保存配置到json文件"""
+        """Save configuration to a JSON file."""
         import json
-        config_dict = {k: str(v) if isinstance(v, Path) else v
-                       for k, v in self.__dict__.items() if not k.startswith('_')}
-        with open(self.output_dir / "config.json", 'w') as f:
+
+        self._create_dirs()
+
+        config_dict = {
+            k: str(v) if isinstance(v, Path) else v
+            for k, v in self.__dict__.items()
+            if not k.startswith("_")
+        }
+        with open(self.output_dir / "config.json", "w") as f:
             json.dump(config_dict, f, indent=4)
-        print(f"✓ 配置已保存: {self.output_dir / 'config.json'}")
+        print(f"Config saved: {self.output_dir / 'config.json'}")
 
 
-# 创建一个全局可用的配置实例
 config = ExperimentConfig()
