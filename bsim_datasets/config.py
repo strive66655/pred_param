@@ -26,20 +26,20 @@ class ExperimentConfig:
         self.log_dir = self.output_dir / "logs"
         self.plot_dir = self.output_dir / "plots"
 
-        self.INPUT_LIS = r"bsim_datasets/mc001 (1).lis"
+        self.INPUT_LIS = r"bsim_datasets/mc111.lis"
         self.OUTPUT_NPZ = r"data/processed/converted_dataset.npz"
 
         # Data settings
         self.num_curves = 10
-        self.vg_points = 51
+        self.vg_points = 37
         self.num_lg = 1
-        self.vd_values = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+        self.vd_values = [0.05, 0.1, 0.2, 0.35, 0.5, 0.6, 0.8, 1.0, 1.2, 1.5]
 
         self.include_raw_id = True
-        self.include_log_id = True
-        self.include_gm_id = True
-        self.include_log_gm = True
-        self.include_log_curvature = False
+        self.include_log_id = True 
+        self.include_gm_id = False
+        self.include_log_gm = False
+        self.include_log_curvature = True
         self.raw_input_dim = self.num_curves * self.vg_points
         self.feature_channels = self._count_feature_channels()
         self.input_dim = self.num_curves * self.feature_channels * self.vg_points
@@ -48,16 +48,16 @@ class ExperimentConfig:
             "VTH0",
             "VOFF",
             "NFACTOR",
-            "K1",
-            "K2",
+            # "K1",
+            # "K2",
             "U0",
             "UA",
             "UB",
             "UC",
-            "RDSW",
+            # "RDSW",
             "AGS",
-            "A0",
-            "KETA",
+            # "A0",
+            # "KETA",
         ]
         self.output_dim = len(self.output_params)
 
@@ -69,7 +69,7 @@ class ExperimentConfig:
         # Model
         self.model_type = "residual_mlp"
         self.mlp_layers = [8000, 8000, 8000]
-        self.residual_hidden_dim = 128
+        self.residual_hidden_dim = 256
         self.residual_blocks = 3
         self.dropout_rate = 0.1
 
@@ -83,7 +83,7 @@ class ExperimentConfig:
         self.scheduler_patience = 10
         self.scheduler_factor = 0.5
         self.early_stopping = True
-        self.early_stopping_patience = 30
+        self.early_stopping_patience = 15
 
     def _count_feature_channels(self):
         return sum(
