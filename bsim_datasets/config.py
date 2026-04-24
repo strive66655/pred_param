@@ -6,7 +6,10 @@ Experiment configuration.
 from datetime import datetime
 from pathlib import Path
 
-import torch
+try:
+    import torch
+except ImportError:
+    torch = None
 
 
 class ExperimentConfig:
@@ -18,7 +21,7 @@ class ExperimentConfig:
         self.experiment_name = f"exp_MLP_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
         # Device
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.device = "cuda" if torch is not None and torch.cuda.is_available() else "cpu"
 
         # Paths
         self.output_dir = Path("experiments") / self.experiment_name
@@ -26,20 +29,25 @@ class ExperimentConfig:
         self.log_dir = self.output_dir / "logs"
         self.plot_dir = self.output_dir / "plots"
 
-        self.INPUT_LIS = r"bsim_datasets/mc111.lis"
+        self.INPUT_LIS = r"bsim_datasets/mc112 (2).lis"
         self.OUTPUT_NPZ = r"data/processed/converted_dataset.npz"
 
         # Data settings
-        self.num_curves = 10
-        self.vg_points = 37
+        self.vg_points = 59
         self.num_lg = 1
-        self.vd_values = [0.05, 0.1, 0.2, 0.35, 0.5, 0.6, 0.8, 1.0, 1.2, 1.5]
+        # self.vd_values = [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0]
+        self.vd_values = [0.05, 5.0]
 
-        self.include_raw_id = True
+        self.vb_values = [0.0, -1.0, -2.0]
+        self.num_vb = len(self.vb_values) if self.vb_values else 1
+        self.mc_indices_per_vb = None
+        self.num_curves = self.num_vb * len(self.vd_values)
+
+        self.include_raw_id = False
         self.include_log_id = True 
         self.include_gm_id = False
         self.include_log_gm = False
-        self.include_log_curvature = True
+        self.include_log_curvature = False
         self.raw_input_dim = self.num_curves * self.vg_points
         self.feature_channels = self._count_feature_channels()
         self.input_dim = self.num_curves * self.feature_channels * self.vg_points
@@ -48,7 +56,7 @@ class ExperimentConfig:
             "VTH0",
             "VOFF",
             "NFACTOR",
-            # "K1",
+            "K1",
             # "K2",
             "U0",
             "UA",
@@ -56,19 +64,19 @@ class ExperimentConfig:
             "UC",
             # "RDSW",
             "AGS",
-            # "A0",
-            # "KETA",
+            "A0",
+            "KETA",
         ]
         self.output_dim = len(self.output_params)
 
         # Preprocessing
-        self.normalization = "standard"  # Informational only in the current pipeline.
+        self.normalization = "minmax"
         self.log_transform = True
         self.clip_min_current = 1e-13
 
         # Model
         self.model_type = "residual_mlp"
-        self.mlp_layers = [8000, 8000, 8000]
+        self.mlp_layers = [1024, 512, 256]
         self.residual_hidden_dim = 256
         self.residual_blocks = 3
         self.dropout_rate = 0.1
@@ -78,6 +86,7 @@ class ExperimentConfig:
         self.epochs = 3000
         self.learning_rate = 1e-3
         self.weight_decay = 1e-5
+        self.grad_clip_norm = 1.0
         self.loss_function = "mse"
         self.scheduler = "plateau"
         self.scheduler_patience = 10

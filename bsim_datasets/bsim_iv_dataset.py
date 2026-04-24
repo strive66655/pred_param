@@ -115,32 +115,35 @@ class BSIMIVDataset(Dataset):
         print(f"Enabled feature blocks: {feature_names}")
 
     def _compute_norm_meta(self):
-        """Compute normalization statistics."""
+        """Compute min-max normalization statistics."""
         return {
-            "iv_mu": self.iv_data.mean(axis=0).tolist(),
-            "iv_sigma": self.iv_data.std(axis=0).tolist(),
-            "params_mu": self.params.mean(axis=0).tolist(),
-            "params_sigma": self.params.std(axis=0).tolist(),
+            "normalization": "minmax",
+            "iv_min": self.iv_data.min(axis=0).tolist(),
+            "iv_max": self.iv_data.max(axis=0).tolist(),
+            "params_min": self.params.min(axis=0).tolist(),
+            "params_max": self.params.max(axis=0).tolist(),
         }
 
     def _apply_norm(self):
-        """Apply Z-score normalization to both inputs and outputs."""
-        iv_mu = np.array(self.norm_meta["iv_mu"], dtype=np.float32)
-        iv_sigma = np.array(self.norm_meta["iv_sigma"], dtype=np.float32)
-        iv_sigma[iv_sigma == 0] = 1.0
-        self.iv_data = (self.iv_data - iv_mu) / iv_sigma
+        """Apply min-max normalization to both inputs and outputs."""
+        iv_min = np.array(self.norm_meta["iv_min"], dtype=np.float32)
+        iv_max = np.array(self.norm_meta["iv_max"], dtype=np.float32)
+        iv_range = iv_max - iv_min
+        iv_range[iv_range == 0] = 1.0
+        self.iv_data = (self.iv_data - iv_min) / iv_range
 
-        p_mu = np.array(self.norm_meta["params_mu"], dtype=np.float32)
-        p_sigma = np.array(self.norm_meta["params_sigma"], dtype=np.float32)
-        p_sigma[p_sigma == 0] = 1.0
-        self.params = (self.params - p_mu) / p_sigma
+        p_min = np.array(self.norm_meta["params_min"], dtype=np.float32)
+        p_max = np.array(self.norm_meta["params_max"], dtype=np.float32)
+        p_range = p_max - p_min
+        p_range[p_range == 0] = 1.0
+        self.params = (self.params - p_min) / p_range
 
     def inverse_transform_params(self, normalized_params):
-        """Restore normalized output parameters to the original scale."""
+        """Restore min-max normalized output parameters to the original scale."""
         normalized_params = np.asarray(normalized_params, dtype=np.float32)
-        p_mu = np.array(self.norm_meta["params_mu"], dtype=np.float32)
-        p_sigma = np.array(self.norm_meta["params_sigma"], dtype=np.float32)
-        return normalized_params * p_sigma + p_mu
+        p_min = np.array(self.norm_meta["params_min"], dtype=np.float32)
+        p_max = np.array(self.norm_meta["params_max"], dtype=np.float32)
+        return normalized_params * (p_max - p_min) + p_min
 
     def _save_norm_meta(self, path):
         os.makedirs(os.path.dirname(path), exist_ok=True)

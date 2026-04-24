@@ -12,7 +12,7 @@ class ParamExtractorIVNet(nn.Module):
             prev_dim = hidden_dim
         layers.append(nn.Linear(prev_dim, output_dim))
         self.net = nn.Sequential(*layers)
-        self.output_act = nn.Identity()
+        self.output_act = nn.Sigmoid()
 
     def forward(self, x):
         x = x.view(x.size(0), -1)

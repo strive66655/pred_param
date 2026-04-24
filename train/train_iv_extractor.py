@@ -83,9 +83,15 @@ def train_one_epoch(model, loader, opt, loss_fn):
 
         # 使用自定义加权 Loss
         loss = loss_fn(pred, params)
+        if not torch.isfinite(loss):
+            print("Warning: non-finite training loss encountered; skipping this batch.")
+            continue
 
         opt.zero_grad()
         loss.backward()
+        grad_clip_norm = getattr(config, "grad_clip_norm", None)
+        if grad_clip_norm is not None and grad_clip_norm > 0:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip_norm)
         opt.step()
         total_loss += loss.item() * iv.size(0)
     return total_loss / len(loader.dataset)

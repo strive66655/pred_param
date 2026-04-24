@@ -1,4 +1,3 @@
-# models/residual_param_extractor.py
 import torch.nn as nn
 
 
@@ -23,12 +22,10 @@ class ResidualMLPParamExtractor(nn.Module):
                 )
             )
 
-        # 输出投影
         self.out_proj = nn.Linear(input_dim, output_dim)
-
-        # 初始化建议（稳定训练）
         nn.init.zeros_(self.out_proj.weight)
         nn.init.zeros_(self.out_proj.bias)
+        self.output_act = nn.Sigmoid()
 
     def forward(self, x):
         """
@@ -39,5 +36,4 @@ class ResidualMLPParamExtractor(nn.Module):
         for block in self.blocks:
             h = h + block(h)
         delta = self.out_proj(h)
-
-        return base + delta
+        return self.output_act(base + delta)
