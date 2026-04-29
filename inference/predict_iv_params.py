@@ -24,6 +24,7 @@ from models.residual_param_extractor import ResidualMLPParamExtractor
 class InferenceConfig:
     experiment_name: str
     model_type: str
+    normalization: str
     num_curves: int
     vg_points: int
     vd_values: list
@@ -66,6 +67,7 @@ class InferenceConfig:
 def load_experiment_config(exp_dir: Path) -> InferenceConfig:
     with open(exp_dir / "config.json", "r", encoding="utf-8") as f:
         raw = json.load(f)
+    raw.setdefault("normalization", "minmax")
     allowed = {f.name for f in fields(InferenceConfig)}
     filtered = {k: v for k, v in raw.items() if k in allowed}
     return InferenceConfig(**filtered)
@@ -217,98 +219,8 @@ def load_sample_from_mea(mea_path: Path, cfg: InferenceConfig) -> np.ndarray:
     return raw_iv
 
 
-def _median_filter_1d(values: np.ndarray, kernel_size: int = 3) -> np.ndarray:
-    if kernel_size <= 1 or values.size == 0:
-        return values.astype(np.float32, copy=True)
-
-    radius = kernel_size // 2
-    padded = np.pad(values, (radius, radius), mode="edge")
-    filtered = np.empty_like(values, dtype=np.float32)
-    for idx in range(values.size):
-        filtered[idx] = np.median(padded[idx:idx + kernel_size])
-    return filtered
-
-
-def preprocess_measured_curve(ids: np.ndarray, cfg: InferenceConfig) -> tuple[np.ndarray, dict]:
-    ids = np.asarray(ids, dtype=np.float32).copy()
-    stats = {
-        "nonfinite_count": int(np.count_nonzero(~np.isfinite(ids))),
-        "negative_count": int(np.count_nonzero(ids < 0)),
-        "below_clip_count_before": int(np.count_nonzero(ids < cfg.clip_min_current)),
-    }
-
-    finite_mask = np.isfinite(ids)
-    if not np.all(finite_mask):
-        finite_idx = np.flatnonzero(finite_mask)
-        if finite_idx.size == 0:
-            ids.fill(cfg.clip_min_current)
-        else:
-            ids[~finite_mask] = np.interp(
-                np.flatnonzero(~finite_mask),
-                finite_idx,
-                ids[finite_idx],
-            ).astype(np.float32)
-
-    positive = ids[ids > cfg.clip_min_current]
-    if positive.size:
-        weak_floor = float(np.percentile(positive, 15))
-        noise_floor = max(cfg.clip_min_current, weak_floor * 0.25)
-        noise_floor = min(noise_floor, float(np.max(positive)) * 1e-3)
-        noise_floor = max(noise_floor, cfg.clip_min_current)
-    else:
-        noise_floor = cfg.clip_min_current
-
-    ids = np.maximum(ids, noise_floor).astype(np.float32)
-    log_ids = np.log10(ids).astype(np.float32)
-
-    smoothed_log = _median_filter_1d(log_ids, kernel_size=3)
-    smoothed_log = _median_filter_1d(smoothed_log, kernel_size=3)
-
-    max_current = float(np.max(ids)) if ids.size else noise_floor
-    weak_threshold = max(noise_floor * 40.0, max_current * 1e-3, cfg.clip_min_current)
-    weak_mask = ids <= weak_threshold
-
-    monotonic_log = np.maximum.accumulate(smoothed_log)
-    processed_log = log_ids.copy()
-    processed_log[weak_mask] = monotonic_log[weak_mask]
-
-    processed_ids = np.power(10.0, processed_log, dtype=np.float32)
-    stats.update(
-        {
-            "noise_floor": float(noise_floor),
-            "weak_threshold": float(weak_threshold),
-            "weak_points": int(np.count_nonzero(weak_mask)),
-            "below_clip_count_after": int(np.count_nonzero(processed_ids < cfg.clip_min_current)),
-            "max_abs_log_shift": float(np.max(np.abs(processed_log - log_ids))) if ids.size else 0.0,
-        }
-    )
-    return processed_ids.astype(np.float32), stats
-
-
-def preprocess_measured_raw_iv(raw_iv: np.ndarray, cfg: InferenceConfig) -> tuple[np.ndarray, dict]:
-    raw_iv_2d = np.asarray(raw_iv, dtype=np.float32).reshape(cfg.num_curves, cfg.vg_points)
-    processed_curves = []
-    curve_stats = []
-
-    for curve_idx, curve in enumerate(raw_iv_2d):
-        processed_curve, stats = preprocess_measured_curve(curve, cfg)
-        stats["curve_index"] = curve_idx
-        processed_curves.append(processed_curve)
-        curve_stats.append(stats)
-
-    processed = np.stack(processed_curves, axis=0).astype(np.float32)
-    summary = {
-        "method": "adaptive_floor_log_median_monotonic",
-        "curve_stats": curve_stats,
-        "total_negative_count": int(sum(item["negative_count"] for item in curve_stats)),
-        "total_nonfinite_count": int(sum(item["nonfinite_count"] for item in curve_stats)),
-        "total_weak_points": int(sum(item["weak_points"] for item in curve_stats)),
-        "max_abs_log_shift": float(max(item["max_abs_log_shift"] for item in curve_stats)) if curve_stats else 0.0,
-    }
-    return processed.reshape(-1), summary
-
-
 def build_model(cfg: InferenceConfig) -> torch.nn.Module:
+    output_activation = "sigmoid" if cfg.normalization.lower() == "minmax" else "identity"
     if cfg.model_type == "residual_mlp":
         return ResidualMLPParamExtractor(
             input_dim=cfg.input_dim,
@@ -316,6 +228,7 @@ def build_model(cfg: InferenceConfig) -> torch.nn.Module:
             hidden_dim=cfg.residual_hidden_dim,
             num_blocks=cfg.residual_blocks,
             dropout=cfg.dropout_rate,
+            output_activation=output_activation,
         )
 
     return ParamExtractorIVNet(
@@ -323,6 +236,7 @@ def build_model(cfg: InferenceConfig) -> torch.nn.Module:
         hidden_layers=cfg.mlp_layers,
         output_dim=cfg.output_dim,
         dropout=cfg.dropout_rate,
+        output_activation=output_activation,
     )
 
 
@@ -356,17 +270,32 @@ def build_features(raw_iv: np.ndarray, cfg: InferenceConfig) -> np.ndarray:
 
 
 def normalize_features(features: np.ndarray, norm_meta: dict) -> np.ndarray:
-    iv_min = np.asarray(norm_meta["iv_min"], dtype=np.float32)
-    iv_max = np.asarray(norm_meta["iv_max"], dtype=np.float32)
-    iv_range = iv_max - iv_min
-    iv_range[iv_range == 0] = 1.0
-    return (features - iv_min) / iv_range
+    normalization = norm_meta.get("normalization", "minmax").lower()
+    if normalization == "minmax":
+        iv_min = np.asarray(norm_meta["iv_min"], dtype=np.float32)
+        iv_max = np.asarray(norm_meta["iv_max"], dtype=np.float32)
+        iv_range = iv_max - iv_min
+        iv_range[iv_range == 0] = 1.0
+        return (features - iv_min) / iv_range
+    if normalization in ("zscore", "z-score"):
+        iv_mean = np.asarray(norm_meta["iv_mean"], dtype=np.float32)
+        iv_std = np.asarray(norm_meta["iv_std"], dtype=np.float32)
+        iv_std[iv_std == 0] = 1.0
+        return (features - iv_mean) / iv_std
+    raise ValueError(f"Unsupported normalization: {normalization}")
 
 
 def inverse_params(pred: np.ndarray, norm_meta: dict) -> np.ndarray:
-    p_min = np.asarray(norm_meta["params_min"], dtype=np.float32)
-    p_max = np.asarray(norm_meta["params_max"], dtype=np.float32)
-    return pred * (p_max - p_min) + p_min
+    normalization = norm_meta.get("normalization", "minmax").lower()
+    if normalization == "minmax":
+        p_min = np.asarray(norm_meta["params_min"], dtype=np.float32)
+        p_max = np.asarray(norm_meta["params_max"], dtype=np.float32)
+        return pred * (p_max - p_min) + p_min
+    if normalization in ("zscore", "z-score"):
+        p_mean = np.asarray(norm_meta["params_mean"], dtype=np.float32)
+        p_std = np.asarray(norm_meta["params_std"], dtype=np.float32)
+        return pred * p_std + p_mean
+    raise ValueError(f"Unsupported normalization: {normalization}")
 
 
 def load_sample_from_dataset(dataset_path: Path, sample_index: int) -> tuple[np.ndarray, np.ndarray | None]:
@@ -380,41 +309,81 @@ def load_sample_from_dataset(dataset_path: Path, sample_index: int) -> tuple[np.
 
 def plot_prediction(raw_iv: np.ndarray, pred_params: np.ndarray, cfg: InferenceConfig, out_path: Path,
                     true_params: np.ndarray | None = None) -> None:
-    raw_iv_2d = raw_iv.reshape(cfg.num_curves, cfg.vg_points)
-    vg_axis = np.arange(cfg.vg_points)
-    vb_values = cfg.vb_values or [None]
-    curve_labels = []
-    for vb in vb_values:
-        for vd in cfg.vd_values:
-            if vb is None:
-                curve_labels.append(f"Vd={vd:g}V")
-            else:
-                curve_labels.append(f"Vbs={vb:g}V, Vds={vd:g}V")
-
-    fig = plt.figure(figsize=(14, 5))
-    ax1 = fig.add_subplot(1, 2, 1)
-    for i in range(cfg.num_curves):
-        label = curve_labels[i] if i < len(curve_labels) else f"Curve {i}"
-        ax1.plot(vg_axis, raw_iv_2d[i], label=label, linewidth=1.8)
-    ax1.set_title("Input Id-Vg Curves (Linear Scale)")
-    ax1.set_xlabel("Vg Point Index")
-    ax1.set_ylabel("Id (A)")
-    ax1.grid(True, linestyle="--", alpha=0.35)
-    ax1.legend(fontsize=8, ncol=2)
-
-    ax2 = fig.add_subplot(1, 2, 2)
+    fig, ax = plt.subplots(figsize=(8, 4.8))
     x = np.arange(len(cfg.output_params))
     width = 0.36 if true_params is not None else 0.6
-    ax2.bar(x - (width / 2 if true_params is not None else 0), pred_params, width=width, label="Pred")
+    ax.bar(x - (width / 2 if true_params is not None else 0), pred_params, width=width, label="Pred")
     if true_params is not None:
-        ax2.bar(x + width / 2, true_params, width=width, label="True")
-    ax2.set_title("Predicted BSIM Parameters")
-    ax2.set_xticks(x)
-    ax2.set_xticklabels(cfg.output_params, rotation=35, ha="right")
-    ax2.grid(True, axis="y", linestyle="--", alpha=0.35)
+        ax.bar(x + width / 2, true_params, width=width, label="True")
+    ax.set_title("Predicted BSIM Parameters")
+    ax.set_xticks(x)
+    ax.set_xticklabels(cfg.output_params, rotation=35, ha="right")
+    ax.grid(True, axis="y", linestyle="--", alpha=0.35)
     if true_params is not None:
-        ax2.legend()
+        ax.legend()
 
+    fig.tight_layout()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=300)
+    plt.close(fig)
+
+
+def plot_mea_log_idvg_comparison(mea_path: Path, cfg: InferenceConfig, out_path: Path) -> None:
+    curves = parse_mea_idvg(mea_path)
+    vb_values = cfg.vb_values or [0.0]
+    vd_values = [float(vd) for vd in cfg.vd_values]
+    colors = ["#ff2f1f", "#0057ff", "#159947", "#8a3ffc", "#e07a00"]
+
+    fig, ax = plt.subplots(figsize=(5.1, 4.1))
+    y_floor = cfg.clip_min_current
+
+    for vd_idx, vd in enumerate(vd_values):
+        color = colors[vd_idx % len(colors)]
+        sampled_vgs = []
+        sampled_ids = []
+
+        for vb in vb_values:
+            curve = find_curve(curves, float(vb), vd)
+            if curve is None:
+                continue
+
+            vgs, ids = curve
+            order = np.argsort(vgs)
+            vgs = vgs[order]
+            ids = np.clip(ids[order], a_min=y_floor, a_max=None)
+
+            ax.plot(vgs, ids, color=color, linewidth=1.4)
+            sampled_vgs.append(vgs)
+            sampled_ids.append(ids)
+
+        if not sampled_vgs:
+            continue
+
+        base_vgs = sampled_vgs[0]
+        aligned_ids = []
+        for vgs, ids in zip(sampled_vgs, sampled_ids):
+            if len(vgs) == len(base_vgs) and np.allclose(vgs, base_vgs):
+                aligned_ids.append(ids)
+            else:
+                aligned_ids.append(np.interp(base_vgs, vgs, ids))
+
+        band = np.stack(aligned_ids, axis=0)
+        ax.fill_between(
+            base_vgs,
+            np.min(band, axis=0),
+            np.max(band, axis=0),
+            color=color,
+            alpha=0.28,
+            linewidth=0,
+        )
+
+    ax.set_yscale("log")
+    ax.set_ylim(1e-13, 1e-3)
+    ax.set_title(r"Logarithmic $I_{ds}-V_{gs}$ Comparison")
+    ax.set_xlabel("Gate Voltage (V)", fontweight="bold")
+    ax.set_ylabel("Drain Current (A)", fontweight="bold")
+    ax.grid(True, which="major", linestyle="-", alpha=0.18)
+    ax.grid(True, which="minor", linestyle=":", alpha=0.12)
     fig.tight_layout()
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path, dpi=300)
@@ -505,10 +474,8 @@ def main() -> None:
     model.eval()
 
     true_params = None
-    preprocessing = None
     if args.mea:
         raw_iv = load_sample_from_mea(Path(args.mea), cfg)
-        raw_iv, preprocessing = preprocess_measured_raw_iv(raw_iv, cfg)
         source = {"type": "mea", "path": str(Path(args.mea).as_posix())}
     else:
         raw_iv, true_params = load_sample_from_dataset(Path(args.dataset), args.sample_index)
@@ -549,8 +516,6 @@ def main() -> None:
             name: float(value) for name, value in zip(cfg.output_params, pred_params)
         },
     }
-    if preprocessing is not None:
-        result["mea_preprocessing"] = preprocessing
     if true_params is not None:
         result["true_params"] = {
             name: float(value) for name, value in zip(cfg.output_params, true_params)
@@ -559,17 +524,22 @@ def main() -> None:
     result_path = output_dir / "prediction.json"
     figure_path = output_dir / "prediction_visualization.png"
     model_input_figure_path = output_dir / "model_input_visualization.png"
+    log_idvg_figure_path = output_dir / "log_idvg_comparison.png"
 
     with open(result_path, "w", encoding="utf-8") as f:
         json.dump(result, f, indent=2)
 
     plot_prediction(raw_iv, pred_params, cfg, figure_path, true_params=true_params)
     plot_model_input(features, cfg, model_input_figure_path)
+    if args.mea:
+        plot_mea_log_idvg_comparison(Path(args.mea), cfg, log_idvg_figure_path)
 
     print(f"Using experiment: {experiment_dir.as_posix()}")
     print(f"Prediction JSON: {result_path.as_posix()}")
     print(f"Visualization: {figure_path.as_posix()}")
     print(f"Model input visualization: {model_input_figure_path.as_posix()}")
+    if args.mea:
+        print(f"Log Id-Vg comparison: {log_idvg_figure_path.as_posix()}")
     print("Required raw input:")
     print(f"  shape = ({cfg.num_curves}, {cfg.vg_points})")
     print(f"  flat_length = {cfg.raw_input_dim}")

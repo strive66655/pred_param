@@ -115,35 +115,70 @@ class BSIMIVDataset(Dataset):
         print(f"Enabled feature blocks: {feature_names}")
 
     def _compute_norm_meta(self):
-        """Compute min-max normalization statistics."""
-        return {
-            "normalization": "minmax",
-            "iv_min": self.iv_data.min(axis=0).tolist(),
-            "iv_max": self.iv_data.max(axis=0).tolist(),
-            "params_min": self.params.min(axis=0).tolist(),
-            "params_max": self.params.max(axis=0).tolist(),
-        }
+        """Compute normalization statistics."""
+        normalization = getattr(config, "normalization", "minmax").lower()
+        if normalization == "minmax":
+            return {
+                "normalization": normalization,
+                "iv_min": self.iv_data.min(axis=0).tolist(),
+                "iv_max": self.iv_data.max(axis=0).tolist(),
+                "params_min": self.params.min(axis=0).tolist(),
+                "params_max": self.params.max(axis=0).tolist(),
+            }
+        if normalization in ("zscore", "z-score"):
+            return {
+                "normalization": "zscore",
+                "iv_mean": self.iv_data.mean(axis=0).tolist(),
+                "iv_std": self.iv_data.std(axis=0).tolist(),
+                "params_mean": self.params.mean(axis=0).tolist(),
+                "params_std": self.params.std(axis=0).tolist(),
+            }
+        raise ValueError(f"Unsupported normalization: {normalization}")
 
     def _apply_norm(self):
-        """Apply min-max normalization to both inputs and outputs."""
-        iv_min = np.array(self.norm_meta["iv_min"], dtype=np.float32)
-        iv_max = np.array(self.norm_meta["iv_max"], dtype=np.float32)
-        iv_range = iv_max - iv_min
-        iv_range[iv_range == 0] = 1.0
-        self.iv_data = (self.iv_data - iv_min) / iv_range
+        """Apply configured normalization to both inputs and outputs."""
+        normalization = self.norm_meta.get("normalization", "minmax").lower()
+        if normalization == "minmax":
+            iv_min = np.array(self.norm_meta["iv_min"], dtype=np.float32)
+            iv_max = np.array(self.norm_meta["iv_max"], dtype=np.float32)
+            iv_range = iv_max - iv_min
+            iv_range[iv_range == 0] = 1.0
+            self.iv_data = (self.iv_data - iv_min) / iv_range
 
-        p_min = np.array(self.norm_meta["params_min"], dtype=np.float32)
-        p_max = np.array(self.norm_meta["params_max"], dtype=np.float32)
-        p_range = p_max - p_min
-        p_range[p_range == 0] = 1.0
-        self.params = (self.params - p_min) / p_range
+            p_min = np.array(self.norm_meta["params_min"], dtype=np.float32)
+            p_max = np.array(self.norm_meta["params_max"], dtype=np.float32)
+            p_range = p_max - p_min
+            p_range[p_range == 0] = 1.0
+            self.params = (self.params - p_min) / p_range
+            return
+
+        if normalization in ("zscore", "z-score"):
+            iv_mean = np.array(self.norm_meta["iv_mean"], dtype=np.float32)
+            iv_std = np.array(self.norm_meta["iv_std"], dtype=np.float32)
+            iv_std[iv_std == 0] = 1.0
+            self.iv_data = (self.iv_data - iv_mean) / iv_std
+
+            p_mean = np.array(self.norm_meta["params_mean"], dtype=np.float32)
+            p_std = np.array(self.norm_meta["params_std"], dtype=np.float32)
+            p_std[p_std == 0] = 1.0
+            self.params = (self.params - p_mean) / p_std
+            return
+
+        raise ValueError(f"Unsupported normalization: {normalization}")
 
     def inverse_transform_params(self, normalized_params):
-        """Restore min-max normalized output parameters to the original scale."""
+        """Restore normalized output parameters to the original scale."""
         normalized_params = np.asarray(normalized_params, dtype=np.float32)
-        p_min = np.array(self.norm_meta["params_min"], dtype=np.float32)
-        p_max = np.array(self.norm_meta["params_max"], dtype=np.float32)
-        return normalized_params * (p_max - p_min) + p_min
+        normalization = self.norm_meta.get("normalization", "minmax").lower()
+        if normalization == "minmax":
+            p_min = np.array(self.norm_meta["params_min"], dtype=np.float32)
+            p_max = np.array(self.norm_meta["params_max"], dtype=np.float32)
+            return normalized_params * (p_max - p_min) + p_min
+        if normalization in ("zscore", "z-score"):
+            p_mean = np.array(self.norm_meta["params_mean"], dtype=np.float32)
+            p_std = np.array(self.norm_meta["params_std"], dtype=np.float32)
+            return normalized_params * p_std + p_mean
+        raise ValueError(f"Unsupported normalization: {normalization}")
 
     def _save_norm_meta(self, path):
         os.makedirs(os.path.dirname(path), exist_ok=True)

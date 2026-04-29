@@ -29,13 +29,13 @@ class ExperimentConfig:
         self.log_dir = self.output_dir / "logs"
         self.plot_dir = self.output_dir / "plots"
 
-        self.INPUT_LIS = r"bsim_datasets/mc112 (2).lis"
+        self.INPUT_LIS = r"bsim_datasets/mc112 (3).lis"
         self.OUTPUT_NPZ = r"data/processed/converted_dataset.npz"
 
         # Data settings
         self.vg_points = 59
         self.num_lg = 1
-        # self.vd_values = [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0]
+        # self.vd_values = [0.05, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0]
         self.vd_values = [0.05, 5.0]
 
         self.vb_values = [0.0, -1.0, -2.0]
@@ -57,7 +57,7 @@ class ExperimentConfig:
             "VOFF",
             "NFACTOR",
             "K1",
-            # "K2",
+            "K2",
             "U0",
             "UA",
             "UB",
@@ -70,7 +70,8 @@ class ExperimentConfig:
         self.output_dim = len(self.output_params)
 
         # Preprocessing
-        self.normalization = "minmax"
+        # Supported values: "minmax" and "zscore".
+        self.normalization = "zscore"
         self.log_transform = True
         self.clip_min_current = 1e-13
 

@@ -42,8 +42,8 @@ The dataset is built from `bsim_datasets/mc001 (1).lis`.
 Implemented in [bsim_iv_dataset.py](/f:/pred_param/bsim_datasets/bsim_iv_dataset.py).
 
 - Input current features are clipped with `clip_min_current` before `log10`.
-- Input features are normalized with min-max scaling.
-- Output parameters are normalized with min-max scaling.
+- Input features are normalized with `config.normalization`.
+- Output parameters are normalized with `config.normalization`.
 - Validation data reuses the training normalization metadata.
 
 This avoids validation leakage and keeps train/validation features in the same space.
@@ -63,7 +63,8 @@ Current default:
 
 Residual MLP is implemented in [residual_param_extractor.py](/f:/pred_param/models/residual_param_extractor.py).
 
-Model outputs are squashed with `Sigmoid`, matching the `[0, 1]` range of min-max normalized target parameters.
+For `normalization = "minmax"`, model outputs are squashed with `Sigmoid` to match the `[0, 1]` target range.
+For `normalization = "zscore"`, the output layer is linear.
 
 ## Training Flow
 
@@ -104,5 +105,5 @@ python train/train_iv_extractor.py
 
 ## Notes
 
-- `config.normalization` is set to `minmax`, matching the implemented behavior for both inputs and labels.
+- `config.normalization` supports `minmax` and `zscore` for both inputs and labels.
 - Experiment outputs are written under `experiments/`.

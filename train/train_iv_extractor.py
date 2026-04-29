@@ -203,6 +203,7 @@ def visualization(train_losses, val_losses, trues, preds, r2_scores):
     plt.close()
 
 def build_model(input_dim):
+    output_activation = "sigmoid" if getattr(config, "normalization", "minmax") == "minmax" else "identity"
     if getattr(config, "model_type", "mlp") == "residual_mlp":
         model = ResidualMLPParamExtractor(
             input_dim=input_dim,
@@ -210,6 +211,7 @@ def build_model(input_dim):
             hidden_dim=config.residual_hidden_dim,
             num_blocks=config.residual_blocks,
             dropout=config.dropout_rate,
+            output_activation=output_activation,
         )
     else:
         model = ParamExtractorIVNet(
@@ -217,6 +219,7 @@ def build_model(input_dim):
             hidden_layers=config.mlp_layers,
             output_dim=config.output_dim,
             dropout=config.dropout_rate,
+            output_activation=output_activation,
         )
 
     return model.to(DEVICE)

@@ -7,7 +7,15 @@ class ResidualMLPParamExtractor(nn.Module):
     params = Linear(x) + ResidualMLP(x)
     """
 
-    def __init__(self, input_dim, output_dim, hidden_dim=128, num_blocks=3, dropout=0.1):
+    def __init__(
+        self,
+        input_dim,
+        output_dim,
+        hidden_dim=128,
+        num_blocks=3,
+        dropout=0.1,
+        output_activation="sigmoid",
+    ):
         super().__init__()
 
         self.linear_head = nn.Linear(input_dim, output_dim)
@@ -25,7 +33,7 @@ class ResidualMLPParamExtractor(nn.Module):
         self.out_proj = nn.Linear(input_dim, output_dim)
         nn.init.zeros_(self.out_proj.weight)
         nn.init.zeros_(self.out_proj.bias)
-        self.output_act = nn.Sigmoid()
+        self.output_act = nn.Sigmoid() if output_activation == "sigmoid" else nn.Identity()
 
     def forward(self, x):
         """
