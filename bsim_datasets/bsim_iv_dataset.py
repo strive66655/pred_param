@@ -15,7 +15,7 @@ class BSIMIVDataset(Dataset):
     def __init__(self, iv_data, params, norm_meta=None, save_meta_path=None):
         """
         BSIM parameter extraction dataset.
-        Expected raw input shape: [N, num_curves * vg_points]
+        Expected raw input shape: [N, num_curves * vg_points + optional extra features]
         """
         assert iv_data.shape[0] == params.shape[0], "Sample count mismatch."
 
@@ -37,15 +37,29 @@ class BSIMIVDataset(Dataset):
     def _build_input_features(self):
         """Build model inputs and flatten them for the MLP."""
         expected_dim = getattr(config, "raw_input_dim", config.num_curves * config.vg_points)
+        extra_input_dim = int(getattr(config, "extra_input_dim", 0))
+        expected_total_dim = expected_dim + extra_input_dim
         current_dim = self.iv_data.shape[1]
 
-        if current_dim != expected_dim:
+        if current_dim != expected_total_dim:
             print(
                 "Warning: raw feature dim "
-                f"({current_dim}) does not match expected dim ({expected_dim})."
+                f"({current_dim}) does not match expected dim ({expected_total_dim})."
             )
 
-        raw_iv = self.iv_data.reshape(-1, config.num_curves, config.vg_points)
+        if current_dim < expected_dim:
+            raise ValueError(
+                f"Raw feature dim ({current_dim}) is smaller than IV dim ({expected_dim})."
+            )
+
+        raw_iv_flat = self.iv_data[:, :expected_dim]
+        extra_features = self.iv_data[:, expected_dim:]
+        if extra_input_dim and extra_features.shape[1] != extra_input_dim:
+            raise ValueError(
+                f"Expected {extra_input_dim} extra feature(s), got {extra_features.shape[1]}."
+            )
+
+        raw_iv = raw_iv_flat.reshape(-1, config.num_curves, config.vg_points)
         feature_blocks = []
         feature_names = []
 
@@ -108,6 +122,9 @@ class BSIMIVDataset(Dataset):
         structured_iv = np.stack(feature_blocks, axis=2).astype(np.float32)
         self.structured_iv_data = structured_iv
         self.iv_data = structured_iv.reshape(structured_iv.shape[0], -1)
+        if extra_features.shape[1] > 0:
+            self.iv_data = np.concatenate([self.iv_data, extra_features.astype(np.float32)], axis=1)
+            feature_names.append("extra_features")
         print(
             "Input features ready, structured_shape="
             f"{self.structured_iv_data.shape[1:]}, flat_dim={self.iv_data.shape[1]}"

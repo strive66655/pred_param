@@ -20,6 +20,37 @@ else:
 VALUE_PATTERN = r"([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?(?:meg|[fpnumkaxgt])?)"
 
 
+def parse_l_um_from_path(path) -> float:
+    """Parse device length from names like L=0.5u.lis or *_L0p18_*.lis."""
+    name = Path(path).stem.lower()
+    match = re.search(r"(?:^|[_\s-])l\s*=\s*([\d.]+|[\d]+p[\d]+)\s*([a-z]*)", name)
+    if match is None:
+        match = re.search(r"(?:^|[_\s-])l([\d.]+|[\d]+p[\d]+)\s*([a-z]*)", name)
+    if match is None:
+        raise ValueError(f"Cannot parse L from file name: {path}")
+
+    value = float(match.group(1).replace("p", "."))
+    unit = match.group(2)
+    if unit in ("", "u", "um"):
+        return value
+    if unit in ("n", "nm"):
+        return value * 1e-3
+    if unit in ("m", "meter", "meters"):
+        return value * 1e6
+    raise ValueError(f"Unsupported L unit '{unit}' in file name: {path}")
+
+
+def build_l_feature(l_um: float) -> float:
+    transform = getattr(config, "l_feature_transform", "log10_um").lower()
+    if transform == "log10_um":
+        if l_um <= 0:
+            raise ValueError(f"L must be positive for log10 transform, got {l_um}.")
+        return float(np.log10(l_um))
+    if transform in ("um", "raw_um"):
+        return float(l_um)
+    raise ValueError(f"Unsupported L feature transform: {transform}")
+
+
 def parse_value(value_str: str) -> float:
     """Parse HSPICE numeric values, including engineering suffixes."""
     value_str = value_str.strip().lower()
@@ -55,31 +86,37 @@ def parse_value(value_str: str) -> float:
 class HspiceLisParser:
     def __init__(self, output_params_list):
         self.full_param_pool = {
-            "vth0": "VTH0",
-            "voff": "VOFF",
-            "nfactor": "NFACTOR",
-            "k1": "K1",
-            "k2": "K2",
-            "u0": "U0",
-            "ua": "UA",
-            "ub": "UB",
-            "uc": "UC",
-            "ags": "AGS",
-            "a0": "A0",
-            "keta": "KETA",
-            "vth0_stamos_val": "VTH0",
-            "voff_stamos_val": "VOFF",
-            "nfactor_stamos_val": "NFACTOR",
-            "k1_stamos_val": "K1",
-            "k2_stamos_val": "K2",
-            "u0_stamos_val": "U0",
-            "ua_stamos_val": "UA",
-            "ub_stamos_val": "UB",
-            "uc_stamos_val": "UC",
-            "rdsw_stamos_val": "RDSW",
-            "ags_stamos_val": "AGS",
-            "a0_stamos_val": "A0",
-            "keta_stamos_val": "KETA",
+               "vth0": "VTH0",
+                "voff": "VOFF",
+                "nfactor": "NFACTOR",
+                "k1": "K1",
+                "k2": "K2",
+                "u0": "U0",
+                "ua": "UA",
+                "ub": "UB",
+                "uc": "UC",
+                "ags": "AGS",
+                "a0": "A0",
+                "keta": "KETA",
+                "dvt0": "DVT0",
+                "dvt1": "DVT1",
+                "dvt2": "DVT2",
+                "lpe0": "LPE0",
+                "lint": "LINT",
+                "lua": "LUA",
+                "lub": "LUB",
+                "luc": "LUC",
+                "dsub": "DSUB",
+                "eta0": "ETA0",
+                "etab": "ETAB",
+                "lags": "LAGS",
+                "la0": "LA0",
+                "drout": "DROUT",
+                "pdiblc1": "PDIBLC1",
+                "pclm": "PCLM",
+                "rdsw": "RDSW",
+                "lu0": "LU0",
+                "lnfactor": "LNFACTOR", 
         }
         self.output_order = output_params_list
 
@@ -222,21 +259,110 @@ class HspiceLisParser:
             return None, None
         return self._merge_vb_records(records)
 
+    def _parse_file_without_l_feature(self, lis_file_path):
+        lis_file_path = Path(lis_file_path)
+        print(f"Reading .lis file: {lis_file_path}")
+        try:
+            content = lis_file_path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            content = lis_file_path.read_text(encoding="latin1")
+
+        records = self._parse_records(content)
+        if not records:
+            return None, None
+
+        return self._merge_vb_records(records)
+
+    def parse_file(self, lis_file_path):
+        features, labels = self._parse_file_without_l_feature(lis_file_path)
+        if features is None:
+            return None, None
+
+        if getattr(config, "include_l_feature", False):
+            l_um = parse_l_um_from_path(lis_file_path)
+            l_feature = build_l_feature(l_um)
+            l_column = np.full((features.shape[0], 1), l_feature, dtype=np.float32)
+            features = np.concatenate([features, l_column], axis=1)
+            print(f"Added L feature from file name: L={l_um:g} um, feature={l_feature:g}")
+
+        return features, labels
+
     def parse_files(self, lis_file_paths):
-        all_records = []
+        if getattr(config, "joint_l_input", False):
+            return self.parse_files_joint_l(lis_file_paths)
+
+        all_features = []
+        all_labels = []
 
         for lis_file_path in lis_file_paths:
-            lis_file_path = Path(lis_file_path)
-            print(f"Reading .lis file: {lis_file_path}")
-            try:
-                content = lis_file_path.read_text(encoding="utf-8")
-            except UnicodeDecodeError:
-                content = lis_file_path.read_text(encoding="latin1")
-            all_records.extend(self._parse_records(content))
+            features, labels = self.parse_file(lis_file_path)
+            if features is None:
+                continue
+            all_features.append(features)
+            all_labels.append(labels)
 
-        if not all_records:
+        if not all_features:
             return None, None
-        return self._merge_vb_records(all_records)
+        return (
+            np.concatenate(all_features, axis=0).astype(np.float32),
+            np.concatenate(all_labels, axis=0).astype(np.float32),
+        )
+
+    def parse_files_joint_l(self, lis_file_paths):
+        per_l_features = []
+        per_l_labels = []
+        l_features = []
+        min_samples = None
+
+        for lis_file_path in lis_file_paths:
+            features, labels = self._parse_file_without_l_feature(lis_file_path)
+            if features is None:
+                raise ValueError(f"No valid samples parsed from joint-L file: {lis_file_path}")
+
+            l_um = parse_l_um_from_path(lis_file_path)
+            l_feature = build_l_feature(l_um)
+            per_l_features.append(features)
+            per_l_labels.append(labels)
+            l_features.append(l_feature)
+            min_samples = features.shape[0] if min_samples is None else min(min_samples, features.shape[0])
+            print(f"Queued joint L input: L={l_um:g} um, feature={l_feature:g}")
+
+        if not per_l_features:
+            return None, None
+
+        if min_samples is None or min_samples <= 0:
+            return None, None
+
+        if any(features.shape[0] != min_samples for features in per_l_features):
+            print(
+                "Warning: L files produced different sample counts; "
+                f"truncating all to {min_samples} aligned samples."
+            )
+
+        aligned_features = [features[:min_samples] for features in per_l_features]
+        aligned_labels = [labels[:min_samples] for labels in per_l_labels]
+        joint_features = np.concatenate(aligned_features, axis=1).astype(np.float32)
+
+        if getattr(config, "include_l_feature", False):
+            l_row = np.asarray(l_features, dtype=np.float32).reshape(1, -1)
+            l_array = np.repeat(l_row, min_samples, axis=0)
+            joint_features = np.concatenate([joint_features, l_array], axis=1).astype(np.float32)
+
+        first_labels = aligned_labels[0]
+        for labels in aligned_labels[1:]:
+            if not np.allclose(first_labels, labels, rtol=1e-4, atol=1e-8):
+                print(
+                    "Warning: labels differ across L files for the same sample index; "
+                    "using labels from the first L file."
+                )
+                break
+
+        print(
+            "Built joint-L dataset: "
+            f"samples={joint_features.shape[0]}, flat_dim={joint_features.shape[1]}, "
+            f"num_l={len(per_l_features)}"
+        )
+        return joint_features, first_labels.astype(np.float32)
 
 
 def main(lis_file_path, output_dir: Path):
@@ -247,12 +373,7 @@ def main(lis_file_path, output_dir: Path):
     if isinstance(lis_file_path, (list, tuple)):
         features, labels = parser.parse_files(lis_file_path)
     else:
-        lis_file_path = Path(lis_file_path)
-        try:
-            content = lis_file_path.read_text(encoding="utf-8")
-        except UnicodeDecodeError:
-            content = lis_file_path.read_text(encoding="latin1")
-        features, labels = parser.parse(content)
+        features, labels = parser.parse_file(lis_file_path)
 
     if features is not None:
         np.save(output_dir / "features.npy", features)

@@ -29,28 +29,39 @@ class ExperimentConfig:
         self.log_dir = self.output_dir / "logs"
         self.plot_dir = self.output_dir / "plots"
 
-        self.INPUT_LIS = r"bsim_datasets/mc112 (3).lis"
+        self.INPUT_LIS = [
+            r"bsim_datasets/L=0.18u.lis",
+            r"bsim_datasets/L=0.5u.lis",
+            r"bsim_datasets/L=1.2u.lis",
+            r"bsim_datasets/L=5u.lis",
+            r"bsim_datasets/L=10u.lis",
+            r"bsim_datasets/L=20u.lis",
+        ]
         self.OUTPUT_NPZ = r"data/processed/converted_dataset.npz"
 
         # Data settings
-        self.vg_points = 59
-        self.num_lg = 1
+        self.vg_points = 23
+        self.joint_l_input = True
+        self.num_lg = len(self.INPUT_LIS) if self.joint_l_input else 1
         # self.vd_values = [0.05, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0]
-        self.vd_values = [0.05, 5.0]
+        self.vd_values = [0.05, 1.8]
 
-        self.vb_values = [0.0, -1.0, -2.0]
+        self.vb_values = [0, -0.45, -0.90, -1.35, -1.80]
         self.num_vb = len(self.vb_values) if self.vb_values else 1
         self.mc_indices_per_vb = None
-        self.num_curves = self.num_vb * len(self.vd_values)
+        self.num_curves = self.num_lg * self.num_vb * len(self.vd_values)
 
-        self.include_raw_id = False
+        self.include_raw_id = True
         self.include_log_id = True 
         self.include_gm_id = False
         self.include_log_gm = False
         self.include_log_curvature = False
         self.raw_input_dim = self.num_curves * self.vg_points
+        self.include_l_feature = True
+        self.l_feature_transform = "log10_um"
+        self.extra_input_dim = self.num_lg if self.include_l_feature and self.joint_l_input else int(self.include_l_feature)
         self.feature_channels = self._count_feature_channels()
-        self.input_dim = self.num_curves * self.feature_channels * self.vg_points
+        self.input_dim = self.num_curves * self.feature_channels * self.vg_points + self.extra_input_dim
 
         self.output_params = [
             "VTH0",
@@ -62,10 +73,28 @@ class ExperimentConfig:
             "UA",
             "UB",
             "UC",
-            # "RDSW",
             "AGS",
             "A0",
             "KETA",
+            "DVT0",
+            "DVT1",
+            "DVT2",
+            "LPE0",
+            "LINT",
+            "LUA",
+            "LUB",
+            "LUC",
+            "DSUB",
+            "ETA0",
+            "ETAB",
+            "LAGS",
+            "LA0",
+            "DROUT",
+            "PDIBLC1",
+            "PCLM",
+            "RDSW",
+            "LU0",
+            "LNFACTOR",
         ]
         self.output_dim = len(self.output_params)
 
